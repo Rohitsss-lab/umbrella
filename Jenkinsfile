@@ -102,22 +102,15 @@ pipeline {
        stage('Update versions.json') {
     steps {
         script {
-            // Read existing json as plain string and parse manually
-            // @NonCPS wrapper avoids JsonSlurper serialization issue
-            def jsonText = fileExists('versions.json') 
-                ? readFile('versions.json') 
-                : '{"test":"1.0.0","test1":"1.0.0","umbrella":"1.0.0"}'
+            def jsonContent = groovy.json.JsonOutput.prettyPrint(
+                groovy.json.JsonOutput.toJson([
+                    test    : env.REPO1_VERSION,
+                    test1   : env.REPO2_VERSION,
+                    umbrella: env.NEW_VERSION
+                ])
+            )
 
-            // Use JsonSlurper inside a @NonCPS method call
-            def data = parseJson(jsonText)
-
-            data['test']     = env.REPO1_VERSION
-            data['test1']    = env.REPO2_VERSION
-            data['umbrella'] = env.NEW_VERSION
-
-            writeFile file: 'versions.json',
-                      text: groovy.json.JsonOutput.prettyPrint(
-                                groovy.json.JsonOutput.toJson(data))
+            writeFile file: 'versions.json', text: jsonContent
 
             echo "versions.json → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION} | umbrella:${env.NEW_VERSION}"
         }
