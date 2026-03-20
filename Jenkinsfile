@@ -24,37 +24,45 @@ pipeline {
         }
 
         stage('Read umbrella current version') {
-            steps {
-                script {
-                    bat "git fetch --tags"
+    steps {
+        script {
+            bat "git fetch --tags"
 
-                    def latestTag = bat(
-                        script: "git tag --sort=-v:refname | findstr /r \"^v\" || echo v1.0.0",
-                        returnStdout: true
-                    ).trim().readLines().last()
+            // Get all tags as a string, handle empty case in Groovy
+            def allTags = bat(
+                script: "git tag --sort=-v:refname",
+                returnStdout: true
+            ).trim()
 
-                    if (!latestTag || !latestTag.startsWith('v')) {
-                        latestTag = 'v1.0.0'
-                    }
+            def latestTag = 'v1.0.0'  // default
 
-                    echo "Latest umbrella tag: ${latestTag}"
-
-                    def version = latestTag.replace("v", "")
-                    def parts   = version.tokenize('.')
-
-                    def major = (parts.size() > 0 && parts[0]) ? parts[0].toInteger() : 1
-                    def minor = (parts.size() > 1 && parts[1]) ? parts[1].toInteger() : 0
-                    def patch = (parts.size() > 2 && parts[2]) ? parts[2].toInteger() : 0
-
-                    patch = patch + 1
-
-                    env.NEW_VERSION = "${major}.${minor}.${patch}"
-                    env.NEW_TAG     = "v${env.NEW_VERSION}"
-
-                    echo "Umbrella bumping to: ${env.NEW_VERSION}"
+            if (allTags) {
+                def tagList = allTags.readLines()
+                              .findAll { it.trim().startsWith('v') }
+                if (tagList) {
+                    latestTag = tagList[0].trim()
                 }
             }
+
+            echo "Latest umbrella tag: ${latestTag}"
+
+            def version = latestTag.replace("v", "")
+            def parts   = version.tokenize('.')
+
+            def major = (parts.size() > 0 && parts[0]) ? parts[0].toInteger() : 1
+            def minor = (parts.size() > 1 && parts[1]) ? parts[1].toInteger() : 0
+            def patch = (parts.size() > 2 && parts[2]) ? parts[2].toInteger() : 0
+
+            patch = patch + 1
+
+            env.NEW_VERSION = "${major}.${minor}.${patch}"
+            env.NEW_TAG     = "v${env.NEW_VERSION}"
+
+            echo "Umbrella bumping to: ${env.NEW_VERSION}"
+            echo "Triggered by: ${params.REPO_NAME} @ ${params.REPO_VERSION}"
         }
+    }
+}
 
         stage('Read latest version of both repos') {
             steps {
