@@ -2,16 +2,16 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'REPO_NAME',    defaultValue: 'test', description: 'Which repo triggered this')
+        string(name: 'REPO_NAME',    defaultValue: 'test',  description: 'Which repo triggered this')
         string(name: 'REPO_VERSION', defaultValue: '1.0.0', description: 'Version of that repo')
     }
 
     environment {
-        GIT_USER_EMAIL  = "rohit.sharma@alliedmed.co.in"
-        GIT_USER_NAME   = "Rohitsss-lab"
-        GIT_REPO_URL    = "https://github.com/Rohitsss-lab/umbrella.git"
-        REPO1_GIT_URL   = "https://github.com/Rohitsss-lab/test.git"
-        REPO2_GIT_URL   = "https://github.com/Rohitsss-lab/test1.git"
+        GIT_USER_EMAIL = "rohit.sharma@alliedmed.co.in"
+        GIT_USER_NAME  = "Rohitsss-lab"
+        GIT_REPO_URL   = "https://github.com/Rohitsss-lab/umbrella.git"
+        REPO1_GIT_URL  = "https://github.com/Rohitsss-lab/test.git"
+        REPO2_GIT_URL  = "https://github.com/Rohitsss-lab/test1.git"
     }
 
     stages {
@@ -35,16 +35,13 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    echo "Latest umbrella tag found: ${latestTag}"
+                    echo "Latest umbrella tag: ${latestTag}"
 
                     def version = latestTag.replace("v", "")
                     def parts   = version.tokenize('.')
-
-                    def major = parts[0].toInteger()
-                    def minor = parts[1].toInteger()
-                    def patch = parts[2].toInteger()
-
-                    patch = patch + 1
+                    def major   = parts[0].toInteger()
+                    def minor   = parts[1].toInteger()
+                    def patch   = parts[2].toInteger() + 1
 
                     env.NEW_VERSION = "${major}.${minor}.${patch}"
                     env.NEW_TAG     = "v${env.NEW_VERSION}"
@@ -63,10 +60,9 @@ pipeline {
                     passwordVariable: 'GIT_TOKEN'
                 )]) {
                     script {
-                        // Fetch latest tag from Repo 1
                         def repo1Tag = sh(
                             script: """
-                                git ls-remote --tags https://${GIT_USER}:${GIT_TOKEN}@github.com/your-org/repo1.git \
+                                git ls-remote --tags https://${GIT_USER}:${GIT_TOKEN}@github.com/Rohitsss-lab/test.git \
                                 | grep -o 'refs/tags/v[0-9]*\\.[0-9]*\\.[0-9]*' \
                                 | sort -t. -k1,1 -k2,2n -k3,3n \
                                 | tail -1 \
@@ -76,10 +72,9 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
-                        // Fetch latest tag from Repo 2
                         def repo2Tag = sh(
                             script: """
-                                git ls-remote --tags https://${GIT_USER}:${GIT_TOKEN}@github.com/your-org/repo2.git \
+                                git ls-remote --tags https://${GIT_USER}:${GIT_TOKEN}@github.com/Rohitsss-lab/test1.git \
                                 | grep -o 'refs/tags/v[0-9]*\\.[0-9]*\\.[0-9]*' \
                                 | sort -t. -k1,1 -k2,2n -k3,3n \
                                 | tail -1 \
@@ -89,12 +84,11 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
-                        echo "Repo 1 latest version: ${repo1Tag}"
-                        echo "Repo 2 latest version: ${repo2Tag}"
+                        echo "test latest tag:  ${repo1Tag}"
+                        echo "test1 latest tag: ${repo2Tag}"
 
-                        // Override the triggered repo's version with the one passed in
-                        // so it always reflects the freshest version
-                        if (params.REPO_NAME == 'repo1') {
+                        // Override the triggering repo with the freshly passed version
+                        if (params.REPO_NAME == 'test') {
                             env.REPO1_VERSION = params.REPO_VERSION
                             env.REPO2_VERSION = repo2Tag
                         } else {
@@ -102,7 +96,7 @@ pipeline {
                             env.REPO2_VERSION = params.REPO_VERSION
                         }
 
-                        echo "Using repo1: ${env.REPO1_VERSION}, repo2: ${env.REPO2_VERSION}"
+                        echo "Using test: ${env.REPO1_VERSION}, test1: ${env.REPO2_VERSION}"
                     }
                 }
             }
@@ -112,28 +106,21 @@ pipeline {
             steps {
                 script {
                     def data = [:]
-
                     if (fileExists('versions.json')) {
-                        def jsonFile = readFile('versions.json')
-                        data = new groovy.json.JsonSlurper().parseText(jsonFile)
+                        data = new groovy.json.JsonSlurper().parseText(readFile('versions.json'))
                     } else {
-                        data = [repo1: "unknown", repo2: "unknown", umbrella: "1.0.0"]
+                        data = [test: "1.0.0", test1: "1.0.0", umbrella: "1.0.0"]
                     }
 
-                    // Always update both repos
-                    data['repo1']    = env.REPO1_VERSION
-                    data['repo2']    = env.REPO2_VERSION
+                    data['test']     = env.REPO1_VERSION
+                    data['test1']    = env.REPO2_VERSION
                     data['umbrella'] = env.NEW_VERSION
 
                     writeFile file: 'versions.json',
                               text: groovy.json.JsonOutput.prettyPrint(
-                                        groovy.json.JsonOutput.toJson(data)
-                                    )
+                                        groovy.json.JsonOutput.toJson(data))
 
-                    echo "versions.json updated:"
-                    echo "  repo1    -> ${env.REPO1_VERSION}"
-                    echo "  repo2    -> ${env.REPO2_VERSION}"
-                    echo "  umbrella -> ${env.NEW_VERSION}"
+                    echo "versions.json → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION} | umbrella:${env.NEW_VERSION}"
                 }
             }
         }
@@ -148,9 +135,7 @@ pipeline {
                     sh """
                         git config user.email "${GIT_USER_EMAIL}"
                         git config user.name  "${GIT_USER_NAME}"
-
-                        git remote set-url origin https://${GIT_USER}:${GIT_TOKEN}@github.com/your-org/umbrella.git
-
+                        git remote set-url origin https://${GIT_USER}:${GIT_TOKEN}@github.com/Rohitsss-lab/umbrella.git
                         git add versions.json
                         git commit -m "chore: ${params.REPO_NAME} updated to ${params.REPO_VERSION} [skip ci]"
                         git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG} - ${params.REPO_NAME}@${params.REPO_VERSION}"
@@ -163,10 +148,10 @@ pipeline {
 
     post {
         success {
-            echo "Umbrella bumped to ${env.NEW_TAG} | repo1: ${env.REPO1_VERSION} | repo2: ${env.REPO2_VERSION}"
+            echo "Umbrella bumped to ${env.NEW_TAG} | test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
         }
         failure {
-            echo "Umbrella pipeline failed - check credentials and repo access"
+            echo "Umbrella pipeline failed — check credentials and repo access"
         }
     }
 }
