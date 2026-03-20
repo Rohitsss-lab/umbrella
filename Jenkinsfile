@@ -4,14 +4,13 @@ pipeline {
     parameters {
         string(name: 'REPO_NAME',    defaultValue: 'test',  description: 'Which repo triggered this')
         string(name: 'REPO_VERSION', defaultValue: '1.0.0', description: 'Version of that repo')
+        string(name: 'BUMP_TYPE',    defaultValue: 'patch', description: 'patch/minor/major')
     }
 
     environment {
         GIT_USER_EMAIL = "rohit.sharma@alliedmed.co.in"
         GIT_USER_NAME  = "Rohitsss-lab"
         GIT_REPO_URL   = "https://github.com/Rohitsss-lab/umbrella.git"
-        REPO1_GIT_URL  = "https://github.com/Rohitsss-lab/test.git"
-        REPO2_GIT_URL  = "https://github.com/Rohitsss-lab/test1.git"
     }
 
     stages {
@@ -27,27 +26,32 @@ pipeline {
         stage('Read umbrella current version') {
             steps {
                 script {
-                    sh "git fetch --prune --unshallow || git fetch --prune"
-                    sh "git fetch --tags"
+                    bat "git fetch --tags"
 
-                    def latestTag = sh(
-                        script: "git tag --sort=-v:refname | grep '^v' | head -1 || echo 'v1.0.0'",
+                    def latestTag = bat(
+                        script: "git tag --sort=-v:refname | findstr /r \"^v\" || echo v1.0.0",
                         returnStdout: true
-                    ).trim()
+                    ).trim().readLines().last()
+
+                    if (!latestTag || !latestTag.startsWith('v')) {
+                        latestTag = 'v1.0.0'
+                    }
 
                     echo "Latest umbrella tag: ${latestTag}"
 
                     def version = latestTag.replace("v", "")
                     def parts   = version.tokenize('.')
-                    def major   = parts[0].toInteger()
-                    def minor   = parts[1].toInteger()
-                    def patch   = parts[2].toInteger() + 1
+
+                    def major = (parts.size() > 0 && parts[0]) ? parts[0].toInteger() : 1
+                    def minor = (parts.size() > 1 && parts[1]) ? parts[1].toInteger() : 0
+                    def patch = (parts.size() > 2 && parts[2]) ? parts[2].toInteger() : 0
+
+                    patch = patch + 1
 
                     env.NEW_VERSION = "${major}.${minor}.${patch}"
                     env.NEW_TAG     = "v${env.NEW_VERSION}"
 
                     echo "Umbrella bumping to: ${env.NEW_VERSION}"
-                    echo "Triggered by: ${params.REPO_NAME} @ ${params.REPO_VERSION}"
                 }
             }
         }
@@ -60,34 +64,19 @@ pipeline {
                     passwordVariable: 'GIT_TOKEN'
                 )]) {
                     script {
-                        def repo1Tag = sh(
-                            script: """
-                                git ls-remote --tags https://${GIT_USER}:${GIT_TOKEN}@github.com/Rohitsss-lab/test.git \
-                                | grep -o 'refs/tags/v[0-9]*\\.[0-9]*\\.[0-9]*' \
-                                | sort -t. -k1,1 -k2,2n -k3,3n \
-                                | tail -1 \
-                                | sed 's|refs/tags/v||' \
-                                || echo '1.0.0'
-                            """,
+                        def repo1Tag = bat(
+                            script: """git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git | findstr /r "refs/tags/v[0-9]" || echo refs/tags/v1.0.0""",
                             returnStdout: true
-                        ).trim()
+                        ).trim().readLines().last().replaceAll('.*refs/tags/v', '')
 
-                        def repo2Tag = sh(
-                            script: """
-                                git ls-remote --tags https://${GIT_USER}:${GIT_TOKEN}@github.com/Rohitsss-lab/test1.git \
-                                | grep -o 'refs/tags/v[0-9]*\\.[0-9]*\\.[0-9]*' \
-                                | sort -t. -k1,1 -k2,2n -k3,3n \
-                                | tail -1 \
-                                | sed 's|refs/tags/v||' \
-                                || echo '1.0.0'
-                            """,
+                        def repo2Tag = bat(
+                            script: """git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test1.git | findstr /r "refs/tags/v[0-9]" || echo refs/tags/v1.0.0""",
                             returnStdout: true
-                        ).trim()
+                        ).trim().readLines().last().replaceAll('.*refs/tags/v', '')
 
-                        echo "test latest tag:  ${repo1Tag}"
-                        echo "test1 latest tag: ${repo2Tag}"
+                        echo "test latest:  ${repo1Tag}"
+                        echo "test1 latest: ${repo2Tag}"
 
-                        // Override the triggering repo with the freshly passed version
                         if (params.REPO_NAME == 'test') {
                             env.REPO1_VERSION = params.REPO_VERSION
                             env.REPO2_VERSION = repo2Tag
@@ -96,7 +85,7 @@ pipeline {
                             env.REPO2_VERSION = params.REPO_VERSION
                         }
 
-                        echo "Using test: ${env.REPO1_VERSION}, test1: ${env.REPO2_VERSION}"
+                        echo "Using test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
                     }
                 }
             }
@@ -120,7 +109,7 @@ pipeline {
                               text: groovy.json.JsonOutput.prettyPrint(
                                         groovy.json.JsonOutput.toJson(data))
 
-                    echo "versions.json → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION} | umbrella:${env.NEW_VERSION}"
+                    echo "versions.json updated"
                 }
             }
         }
@@ -132,13 +121,13 @@ pipeline {
                     usernameVariable: 'GIT_USER',
                     passwordVariable: 'GIT_TOKEN'
                 )]) {
-                    sh """
+                    bat """
                         git config user.email "${GIT_USER_EMAIL}"
                         git config user.name  "${GIT_USER_NAME}"
-                        git remote set-url origin https://${GIT_USER}:${GIT_TOKEN}@github.com/Rohitsss-lab/umbrella.git
+                        git remote set-url origin https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/umbrella.git
                         git add versions.json
                         git commit -m "chore: ${params.REPO_NAME} updated to ${params.REPO_VERSION} [skip ci]"
-                        git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG} - ${params.REPO_NAME}@${params.REPO_VERSION}"
+                        git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG}"
                         git push origin main --tags
                     """
                 }
@@ -148,10 +137,10 @@ pipeline {
 
     post {
         success {
-            echo "Umbrella bumped to ${env.NEW_TAG} | test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
+            echo "Umbrella ${env.NEW_TAG} | test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
         }
         failure {
-            echo "Umbrella pipeline failed — check credentials and repo access"
+            echo "Umbrella pipeline failed"
         }
     }
 }
