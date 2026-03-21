@@ -8,10 +8,9 @@ pipeline {
     }
 
     environment {
-        GIT_USER_EMAIL = "rohit.sharma@alliedmed.co.in"
-        GIT_USER_NAME  = "Rohitsss-lab"
-        GIT_REPO_URL   = "https://github.com/Rohitsss-lab/umbrella.git"
-        PYTHON         = "\"C:\\Program Files\\Python313\\python.exe\""
+        GIT_USER_EMAIL  = "rohit.sharma@alliedmed.co.in"
+        GIT_USER_NAME   = "Rohitsss-lab"
+        GIT_REPO_URL    = "https://github.com/Rohitsss-lab/umbrella.git"
     }
 
     stages {
@@ -30,21 +29,17 @@ pipeline {
             }
         }
 
-        stage('Read and write versions') {
+        stage('Process versions') {
             steps {
-                script {
-                    // Write Python script that does ALL the work
-                    // It reads versions.json and writes 4 output files directly
-                    writeFile file: 'process_versions.py', text: """
-import json, sys
+                // Write python script - no script block, no GString interpolation
+                writeFile file: 'process_versions.py', text: '''import json, sys, os
 
-repo_name    = sys.argv[1]
-repo_version = sys.argv[2]
+repo_name    = os.environ["TRIGGERED_REPO"]
+repo_version = os.environ["TRIGGERED_VERSION"]
 
 with open("versions.json") as f:
     data = json.load(f)
 
-# Bump umbrella patch
 parts = data["umbrella"].split(".")
 new_umbrella = "{}.{}.{}".format(parts[0], parts[1], int(parts[2]) + 1)
 
@@ -61,55 +56,42 @@ else:
     new_test  = current_test
     new_test1 = current_test1
 
-# Write each value to its own file — no stdout parsing needed
 with open("NEW_UMBRELLA_VERSION.txt", "w") as f:
     f.write(new_umbrella)
-
 with open("NEW_TAG.txt", "w") as f:
     f.write("v" + new_umbrella)
-
 with open("REPO1_VERSION.txt", "w") as f:
     f.write(new_test)
-
 with open("REPO2_VERSION.txt", "w") as f:
     f.write(new_test1)
 
-print("Done: umbrella={} test={} test1={}".format(new_umbrella, new_test, new_test1))
-"""
+with open("versions.json", "w") as f:
+    json.dump({"test": new_test, "test1": new_test1, "umbrella": new_umbrella}, f, indent=4)
 
-                    // Run Python — it writes files directly, no stdout parsing
-                    bat "${env.PYTHON} process_versions.py ${params.REPO_NAME} ${params.REPO_VERSION}"
+print("OK umbrella=" + new_umbrella + " test=" + new_test + " test1=" + new_test1)
+'''
+                // Pass params as env vars — no GString interpolation inside bat command
+                withEnv(["TRIGGERED_REPO=${params.REPO_NAME}", "TRIGGERED_VERSION=${params.REPO_VERSION}"]) {
+                    bat "\"C:\\Program Files\\Python313\\python.exe\" process_versions.py"
                 }
             }
         }
 
-        stage('Update versions.json') {
+        stage('Read results') {
             steps {
                 script {
-                    // Read from files — plain string reads, zero regex
-                    def newUmbrella  = readFile('NEW_UMBRELLA_VERSION.txt').trim()
-                    def newTag       = readFile('NEW_TAG.txt').trim()
-                    def repo1Version = readFile('REPO1_VERSION.txt').trim()
-                    def repo2Version = readFile('REPO2_VERSION.txt').trim()
-
-                    env.NEW_VERSION   = newUmbrella
-                    env.NEW_TAG       = newTag
-                    env.REPO1_VERSION = repo1Version
-                    env.REPO2_VERSION = repo2Version
-
-                    echo "Writing → test:${repo1Version} | test1:${repo2Version} | umbrella:${newUmbrella}"
-
-                    def jsonContent = groovy.json.JsonOutput.prettyPrint(
-                        groovy.json.JsonOutput.toJson([
-                            test    : repo1Version,
-                            test1   : repo2Version,
-                            umbrella: newUmbrella
-                        ])
-                    )
-
-                    writeFile file: 'versions.json', text: jsonContent
-                    echo readFile('versions.json')
+                    env.NEW_VERSION   = readFile('NEW_UMBRELLA_VERSION.txt').trim()
+                    env.NEW_TAG       = readFile('NEW_TAG.txt').trim()
+                    env.REPO1_VERSION = readFile('REPO1_VERSION.txt').trim()
+                    env.REPO2_VERSION = readFile('REPO2_VERSION.txt').trim()
                 }
+                echo "umbrella:${env.NEW_VERSION} test:${env.REPO1_VERSION} test1:${env.REPO2_VERSION}"
+            }
+        }
+
+        stage('Show versions.json') {
+            steps {
+                bat "type versions.json"
             }
         }
 
@@ -121,12 +103,12 @@ print("Done: umbrella={} test={} test1={}".format(new_umbrella, new_test, new_te
                     passwordVariable: 'GIT_TOKEN'
                 )]) {
                     bat """
-                        git config user.email "${GIT_USER_EMAIL}"
-                        git config user.name  "${GIT_USER_NAME}"
+                        git config user.email %GIT_USER_EMAIL%
+                        git config user.name  %GIT_USER_NAME%
                         git remote set-url origin https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/umbrella.git
                         git add versions.json
-                        git commit -m "chore: ${params.REPO_NAME} updated to ${params.REPO_VERSION} [skip ci]"
-                        git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG}"
+                        git commit -m "chore: update versions [skip ci]"
+                        git tag -a %NEW_TAG% -m "Umbrella %NEW_TAG%"
                         git push origin main --tags
                     """
                 }
