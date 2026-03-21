@@ -22,7 +22,22 @@ pipeline {
                     url: env.GIT_REPO_URL
             }
         }
-
+    stage('Debug') {
+    steps {
+        script {
+            def allTagsRaw = bat(
+                script: "git tag",
+                returnStdout: true
+            ).trim()
+            echo "=== RAW TAG OUTPUT START ==="
+            echo allTagsRaw
+            echo "=== RAW TAG OUTPUT END ==="
+            echo "=== PARAMS ==="
+            echo "REPO_NAME: '${params.REPO_NAME}'"
+            echo "REPO_VERSION: '${params.REPO_VERSION}'"
+        }
+    }
+}
         stage('Read umbrella current version') {
             steps {
                 script {
