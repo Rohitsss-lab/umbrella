@@ -38,15 +38,13 @@ pipeline {
                     passwordVariable: 'GIT_TOKEN'
                 )]) {
                     script {
-                        // Run Python script — it does ALL version logic
                         def output = bat(
-                            script: "\"%PYTHON%\" umbrella_bump.py ${params.REPO_NAME} ${params.REPO_VERSION} %GIT_USER% %GIT_TOKEN%",
+                            script: "\"%PYTHON%\" version_bump.py ${params.REPO_NAME} ${params.REPO_VERSION} %GIT_USER% %GIT_TOKEN%",
                             returnStdout: true
                         ).trim()
 
                         echo "Python output: ${output}"
 
-                        // Parse key=value lines from output
                         output.readLines().each { line ->
                             line = line.trim()
                             if (line.startsWith('NEW_VERSION=')) {
