@@ -23,111 +23,132 @@ pipeline {
             }
         }
 
-        stage('Read umbrella current version') {
-            steps {
-                script {
-                    bat "git fetch --tags"
+       stage('Read umbrella current version') {
+    steps {
+        script {
+            bat "git fetch --tags"
 
-                    def allTags = bat(
-                        script: "git tag",
-                        returnStdout: true
-                    ).trim()
+            def allTags = bat(
+                script: "git tag",
+                returnStdout: true
+            ).trim()
 
-                    def latestTag = 'v1.0.0'
+            def latestTag = 'v1.0.0'
 
-                    if (allTags) {
-                        // Sort numerically not alphabetically
-                        def tagList = allTags.readLines()
-                            .findAll { it.trim().startsWith('v') }
-                            .findAll { it.trim().matches('v[0-9]+\\.[0-9]+\\.[0-9]+') }
-                            .sort { a, b ->
-                                def av = a.replace('v','').tokenize('.').collect { it.toInteger() }
-                                def bv = b.replace('v','').tokenize('.').collect { it.toInteger() }
-                                [av[0] <=> bv[0], av[1] <=> bv[1], av[2] <=> bv[2]].find { it != 0 } ?: 0
-                            }
-                        if (tagList) {
-                            latestTag = tagList.last().trim()
+            if (allTags) {
+                def tagList = allTags.readLines()
+                    .findAll { it.trim().matches('v[0-9]+\\.[0-9]+\\.[0-9]+') }
+                    .collect { it.trim() }
+
+                if (tagList) {
+                    // Sort numerically using max comparison instead of .sort()
+                    def best = tagList[0]
+                    for (t in tagList) {
+                        def bp = best.replace('v','').tokenize('.')
+                        def tp = t.replace('v','').tokenize('.')
+                        def bMajor = bp[0].toInteger()
+                        def bMinor = bp[1].toInteger()
+                        def bPatch = bp[2].toInteger()
+                        def tMajor = tp[0].toInteger()
+                        def tMinor = tp[1].toInteger()
+                        def tPatch = tp[2].toInteger()
+                        if (tMajor > bMajor ||
+                           (tMajor == bMajor && tMinor > bMinor) ||
+                           (tMajor == bMajor && tMinor == bMinor && tPatch > bPatch)) {
+                            best = t
                         }
                     }
-
-                    echo "Latest umbrella tag: ${latestTag}"
-
-                    def version = latestTag.replace("v", "")
-                    def parts   = version.tokenize('.')
-
-                    def major = (parts.size() > 0 && parts[0]) ? parts[0].toInteger() : 1
-                    def minor = (parts.size() > 1 && parts[1]) ? parts[1].toInteger() : 0
-                    def patch = (parts.size() > 2 && parts[2]) ? parts[2].toInteger() : 0
-
-                    patch = patch + 1
-
-                    env.NEW_VERSION = "${major}.${minor}.${patch}"
-                    env.NEW_TAG     = "v${env.NEW_VERSION}"
-
-                    echo "Umbrella bumping to: ${env.NEW_VERSION}"
-                    echo "Triggered by: ${params.REPO_NAME} @ ${params.REPO_VERSION}"
+                    latestTag = best
                 }
             }
-        }
 
+            echo "Latest umbrella tag: ${latestTag}"
+
+            def version = latestTag.replace("v", "")
+            def parts   = version.tokenize('.')
+
+            def major = parts[0].toInteger()
+            def minor = parts[1].toInteger()
+            def patch = parts[2].toInteger() + 1
+
+            env.NEW_VERSION = "${major}.${minor}.${patch}"
+            env.NEW_TAG     = "v${env.NEW_VERSION}"
+
+            echo "Umbrella bumping to: ${env.NEW_VERSION}"
+            echo "Triggered by: ${params.REPO_NAME} @ ${params.REPO_VERSION}"
+        }
+    }
+}
         stage('Read latest version of both repos') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'github-token',
-                    usernameVariable: 'GIT_USER',
-                    passwordVariable: 'GIT_TOKEN'
-                )]) {
-                    script {
-                        def repo1Raw = bat(
-                            script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git",
-                            returnStdout: true
-                        ).trim()
+    steps {
+        withCredentials([usernamePassword(
+            credentialsId: 'github-token',
+            usernameVariable: 'GIT_USER',
+            passwordVariable: 'GIT_TOKEN'
+        )]) {
+            script {
+                def repo1Raw = bat(
+                    script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git",
+                    returnStdout: true
+                ).trim()
 
-                        def repo2Raw = bat(
-                            script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test1.git",
-                            returnStdout: true
-                        ).trim()
+                def repo2Raw = bat(
+                    script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test1.git",
+                    returnStdout: true
+                ).trim()
 
-                        // Numeric sort helper — picks true latest version
-                        def getLatest = { raw ->
-                            def versions = raw.readLines()
-                                .findAll { it.contains('refs/tags/v') && !it.contains('^{}') }
-                                .collect { it.replaceAll('.*refs/tags/v', '').trim() }
-                                .findAll { it.matches('[0-9]+\\.[0-9]+\\.[0-9]+') }
-                                .sort { a, b ->
-                                    def av = a.tokenize('.').collect { it.toInteger() }
-                                    def bv = b.tokenize('.').collect { it.toInteger() }
-                                    [av[0] <=> bv[0], av[1] <=> bv[1], av[2] <=> bv[2]].find { it != 0 } ?: 0
-                                }
-                            return versions ? versions.last() : '1.0.0'
+                // Find numerically latest version from raw ls-remote output
+                def findLatest = { raw ->
+                    def versions = raw.readLines()
+                        .findAll { it.contains('refs/tags/v') && !it.contains('^{}') }
+                        .collect { it.replaceAll('.*refs/tags/v', '').trim() }
+                        .findAll { it.matches('[0-9]+\\.[0-9]+\\.[0-9]+') }
+
+                    if (!versions) return '1.0.0'
+
+                    def best = versions[0]
+                    for (v in versions) {
+                        def bp = best.tokenize('.')
+                        def vp = v.tokenize('.')
+                        def bMaj = bp[0].toInteger()
+                        def bMin = bp[1].toInteger()
+                        def bPat = bp[2].toInteger()
+                        def vMaj = vp[0].toInteger()
+                        def vMin = vp[1].toInteger()
+                        def vPat = vp[2].toInteger()
+                        if (vMaj > bMaj ||
+                           (vMaj == bMaj && vMin > bMin) ||
+                           (vMaj == bMaj && vMin == bMin && vPat > bPat)) {
+                            best = v
                         }
-
-                        def repo1Tag = getLatest(repo1Raw)
-                        def repo2Tag = getLatest(repo2Raw)
-
-                        echo "test  latest from remote: ${repo1Tag}"
-                        echo "test1 latest from remote: ${repo2Tag}"
-                        echo "Triggered by REPO_NAME:    ${params.REPO_NAME}"
-                        echo "Triggered by REPO_VERSION: ${params.REPO_VERSION}"
-
-                        // Override triggered repo with the freshly passed version
-                        if (params.REPO_NAME == 'test') {
-                            env.REPO1_VERSION = params.REPO_VERSION
-                            env.REPO2_VERSION = repo2Tag
-                        } else if (params.REPO_NAME == 'test1') {
-                            env.REPO1_VERSION = repo1Tag
-                            env.REPO2_VERSION = params.REPO_VERSION
-                        } else {
-                            env.REPO1_VERSION = repo1Tag
-                            env.REPO2_VERSION = repo2Tag
-                        }
-
-                        echo "Final → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
                     }
+                    return best
                 }
+
+                def repo1Tag = findLatest(repo1Raw)
+                def repo2Tag = findLatest(repo2Raw)
+
+                echo "test  latest from remote: ${repo1Tag}"
+                echo "test1 latest from remote: ${repo2Tag}"
+                echo "Triggered by REPO_NAME:    ${params.REPO_NAME}"
+                echo "Triggered by REPO_VERSION: ${params.REPO_VERSION}"
+
+                if (params.REPO_NAME == 'test') {
+                    env.REPO1_VERSION = params.REPO_VERSION
+                    env.REPO2_VERSION = repo2Tag
+                } else if (params.REPO_NAME == 'test1') {
+                    env.REPO1_VERSION = repo1Tag
+                    env.REPO2_VERSION = params.REPO_VERSION
+                } else {
+                    env.REPO1_VERSION = repo1Tag
+                    env.REPO2_VERSION = repo2Tag
+                }
+
+                echo "Final → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
             }
         }
-
+    }
+}
         stage('Update versions.json') {
             steps {
                 script {
