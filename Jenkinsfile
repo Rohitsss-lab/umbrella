@@ -82,89 +82,89 @@ pipeline {
     }
 }
 
-        stage('Read latest version of both repos') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'github-token',
-                    usernameVariable: 'GIT_USER',
-                    passwordVariable: 'GIT_TOKEN'
-                )]) {
-                    script {
-                        def repo1Raw = bat(
-                            script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git",
-                            returnStdout: true
-                        ).trim()
+stage('Read latest version of both repos') {
+    steps {
+        withCredentials([usernamePassword(
+            credentialsId: 'github-token',
+            usernameVariable: 'GIT_USER',
+            passwordVariable: 'GIT_TOKEN'
+        )]) {
+            script {
+                def repo1Raw = bat(
+                    script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git",
+                    returnStdout: true
+                ).trim()
 
-                        def repo2Raw = bat(
-                            script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test1.git",
-                            returnStdout: true
-                        ).trim()
+                def repo2Raw = bat(
+                    script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test1.git",
+                    returnStdout: true
+                ).trim()
 
-                        // Find latest version from repo1 — plain for loop, no closures
-                        def r1Maj = 1; def r1Min = 0; def r1Pat = 0
-                        def r1Lines = repo1Raw.split('\n')
-                        for (int i = 0; i < r1Lines.size(); i++) {
-                            def line = r1Lines[i].trim()
-                            if (line.contains('refs/tags/v') && !line.contains('^{}')) {
-                                def ver = line.replaceAll('.*refs/tags/v', '').trim()
-                                if (ver ==~ /[0-9]+\.[0-9]+\.[0-9]+/) {
-                                    def p = ver.split('\\.')
-                                    def maj = p[0].toInteger()
-                                    def min = p[1].toInteger()
-                                    def pat = p[2].toInteger()
-                                    if (maj > r1Maj ||
-                                       (maj == r1Maj && min > r1Min) ||
-                                       (maj == r1Maj && min == r1Min && pat > r1Pat)) {
-                                        r1Maj = maj; r1Min = min; r1Pat = pat
-                                    }
-                                }
+                // repo1 — skip first line, strip \r
+                def r1Maj = 1; def r1Min = 0; def r1Pat = 0
+                def r1Lines = repo1Raw.replaceAll('\r', '').split('\n')
+                for (int i = 1; i < r1Lines.size(); i++) {
+                    def line = r1Lines[i].trim()
+                    if (line.contains('refs/tags/v') && !line.contains('^{}')) {
+                        def ver = line.replaceAll('.*refs/tags/v', '').trim()
+                        if (ver ==~ /[0-9]+\.[0-9]+\.[0-9]+/) {
+                            def p = ver.split('\\.')
+                            def maj = p[0].toInteger()
+                            def min = p[1].toInteger()
+                            def pat = p[2].toInteger()
+                            if (maj > r1Maj ||
+                               (maj == r1Maj && min > r1Min) ||
+                               (maj == r1Maj && min == r1Min && pat > r1Pat)) {
+                                r1Maj = maj; r1Min = min; r1Pat = pat
                             }
                         }
-                        def repo1Tag = "${r1Maj}.${r1Min}.${r1Pat}"
-
-                        // Find latest version from repo2 — plain for loop, no closures
-                        def r2Maj = 1; def r2Min = 0; def r2Pat = 0
-                        def r2Lines = repo2Raw.split('\n')
-                        for (int i = 0; i < r2Lines.size(); i++) {
-                            def line = r2Lines[i].trim()
-                            if (line.contains('refs/tags/v') && !line.contains('^{}')) {
-                                def ver = line.replaceAll('.*refs/tags/v', '').trim()
-                                if (ver ==~ /[0-9]+\.[0-9]+\.[0-9]+/) {
-                                    def p = ver.split('\\.')
-                                    def maj = p[0].toInteger()
-                                    def min = p[1].toInteger()
-                                    def pat = p[2].toInteger()
-                                    if (maj > r2Maj ||
-                                       (maj == r2Maj && min > r2Min) ||
-                                       (maj == r2Maj && min == r2Min && pat > r2Pat)) {
-                                        r2Maj = maj; r2Min = min; r2Pat = pat
-                                    }
-                                }
-                            }
-                        }
-                        def repo2Tag = "${r2Maj}.${r2Min}.${r2Pat}"
-
-                        echo "test  latest: ${repo1Tag}"
-                        echo "test1 latest: ${repo2Tag}"
-                        echo "Triggered by REPO_NAME:    ${params.REPO_NAME}"
-                        echo "Triggered by REPO_VERSION: ${params.REPO_VERSION}"
-
-                        if (params.REPO_NAME == 'test') {
-                            env.REPO1_VERSION = params.REPO_VERSION
-                            env.REPO2_VERSION = repo2Tag
-                        } else if (params.REPO_NAME == 'test1') {
-                            env.REPO1_VERSION = repo1Tag
-                            env.REPO2_VERSION = params.REPO_VERSION
-                        } else {
-                            env.REPO1_VERSION = repo1Tag
-                            env.REPO2_VERSION = repo2Tag
-                        }
-
-                        echo "Final → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
                     }
                 }
+                def repo1Tag = "${r1Maj}.${r1Min}.${r1Pat}"
+
+                // repo2 — skip first line, strip \r
+                def r2Maj = 1; def r2Min = 0; def r2Pat = 0
+                def r2Lines = repo2Raw.replaceAll('\r', '').split('\n')
+                for (int i = 1; i < r2Lines.size(); i++) {
+                    def line = r2Lines[i].trim()
+                    if (line.contains('refs/tags/v') && !line.contains('^{}')) {
+                        def ver = line.replaceAll('.*refs/tags/v', '').trim()
+                        if (ver ==~ /[0-9]+\.[0-9]+\.[0-9]+/) {
+                            def p = ver.split('\\.')
+                            def maj = p[0].toInteger()
+                            def min = p[1].toInteger()
+                            def pat = p[2].toInteger()
+                            if (maj > r2Maj ||
+                               (maj == r2Maj && min > r2Min) ||
+                               (maj == r2Maj && min == r2Min && pat > r2Pat)) {
+                                r2Maj = maj; r2Min = min; r2Pat = pat
+                            }
+                        }
+                    }
+                }
+                def repo2Tag = "${r2Maj}.${r2Min}.${r2Pat}"
+
+                echo "test  latest: ${repo1Tag}"
+                echo "test1 latest: ${repo2Tag}"
+                echo "REPO_NAME param:    '${params.REPO_NAME}'"
+                echo "REPO_VERSION param: '${params.REPO_VERSION}'"
+
+                if (params.REPO_NAME == 'test') {
+                    env.REPO1_VERSION = params.REPO_VERSION
+                    env.REPO2_VERSION = repo2Tag
+                } else if (params.REPO_NAME == 'test1') {
+                    env.REPO1_VERSION = repo1Tag
+                    env.REPO2_VERSION = params.REPO_VERSION
+                } else {
+                    env.REPO1_VERSION = repo1Tag
+                    env.REPO2_VERSION = repo2Tag
+                }
+
+                echo "Final → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
             }
         }
+    }
+}
 
         stage('Update versions.json') {
             steps {
