@@ -30,27 +30,27 @@ pipeline {
             }
         }
 
-        stage('Read current versions') {
+        stage('Read and write versions') {
             steps {
                 script {
-                    // Write a Python helper script to parse versions.json
-                    writeFile file: 'read_versions.py', text: '''
+                    // Write Python script that does ALL the work
+                    // It reads versions.json and writes 4 output files directly
+                    writeFile file: 'process_versions.py', text: """
 import json, sys
-
-with open("versions.json") as f:
-    data = json.load(f)
 
 repo_name    = sys.argv[1]
 repo_version = sys.argv[2]
 
-# Parse umbrella version and bump patch
+with open("versions.json") as f:
+    data = json.load(f)
+
+# Bump umbrella patch
 parts = data["umbrella"].split(".")
-new_umbrella = f"{parts[0]}.{parts[1]}.{int(parts[2]) + 1}"
+new_umbrella = "{}.{}.{}".format(parts[0], parts[1], int(parts[2]) + 1)
 
 current_test  = data["test"]
 current_test1 = data["test1"]
 
-# Override triggered repo
 if repo_name == "test":
     new_test  = repo_version
     new_test1 = current_test1
@@ -61,42 +61,24 @@ else:
     new_test  = current_test
     new_test1 = current_test1
 
-# Print all values — one per line in fixed order
-print(new_umbrella)
-print(new_test)
-print(new_test1)
-'''
+# Write each value to its own file — no stdout parsing needed
+with open("NEW_UMBRELLA_VERSION.txt", "w") as f:
+    f.write(new_umbrella)
 
-                    def rawOutput = bat(
-                        script: "${env.PYTHON} read_versions.py ${params.REPO_NAME} ${params.REPO_VERSION}",
-                        returnStdout: true
-                    ).trim()
+with open("NEW_TAG.txt", "w") as f:
+    f.write("v" + new_umbrella)
 
-                    echo "Python output: '${rawOutput}'"
+with open("REPO1_VERSION.txt", "w") as f:
+    f.write(new_test)
 
-                    // Parse lines — skip first line (bat command echo)
-                    def lines = rawOutput.replaceAll('\r', '').split('\n')
-                    def resultLines = []
-                    for (int i = 0; i < lines.size(); i++) {
-                        def l = lines[i].trim()
-                        if (l.matches('[0-9]+\\.[0-9]+\\.[0-9]+')) {
-                            resultLines.add(l)
-                        }
-                    }
+with open("REPO2_VERSION.txt", "w") as f:
+    f.write(new_test1)
 
-                    echo "Parsed versions: ${resultLines}"
+print("Done: umbrella={} test={} test1={}".format(new_umbrella, new_test, new_test1))
+"""
 
-                    // Write to temp files
-                    writeFile file: 'NEW_UMBRELLA_VERSION.txt', text: resultLines[0]
-                    writeFile file: 'NEW_TAG.txt',              text: "v${resultLines[0]}"
-                    writeFile file: 'REPO1_VERSION.txt',        text: resultLines[1]
-                    writeFile file: 'REPO2_VERSION.txt',        text: resultLines[2]
-
-                    echo "REPO_NAME param:    '${params.REPO_NAME}'"
-                    echo "REPO_VERSION param: '${params.REPO_VERSION}'"
-                    echo "New umbrella:        ${resultLines[0]}"
-                    echo "New test:            ${resultLines[1]}"
-                    echo "New test1:           ${resultLines[2]}"
+                    // Run Python — it writes files directly, no stdout parsing
+                    bat "${env.PYTHON} process_versions.py ${params.REPO_NAME} ${params.REPO_VERSION}"
                 }
             }
         }
@@ -104,6 +86,7 @@ print(new_test1)
         stage('Update versions.json') {
             steps {
                 script {
+                    // Read from files — plain string reads, zero regex
                     def newUmbrella  = readFile('NEW_UMBRELLA_VERSION.txt').trim()
                     def newTag       = readFile('NEW_TAG.txt').trim()
                     def repo1Version = readFile('REPO1_VERSION.txt').trim()
