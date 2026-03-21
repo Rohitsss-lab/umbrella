@@ -1,49 +1,3 @@
-@NonCPS
-def processVersions(String jsonText, String repoName, String repoVersion, String bumpType) {
-    def json         = new groovy.json.JsonSlurper().parseText(jsonText)
-    def currentTest  = json.test as String
-    def currentTest1 = json.test1 as String
-    def umbrellaVer  = json.umbrella as String
-
-    def newTest  = currentTest
-    def newTest1 = currentTest1
-
-    if (repoName == 'test') {
-        newTest = repoVersion
-    } else if (repoName == 'test1') {
-        newTest1 = repoVersion
-    } else {
-        throw new IllegalArgumentException("Invalid REPO_NAME: " + repoName)
-    }
-
-    def parts = umbrellaVer.split('\\.')
-    def major = parts[0].toInteger()
-    def minor = parts[1].toInteger()
-    def patch = parts[2].toInteger()
-
-    if (bumpType == 'major') { major += 1; minor = 0; patch = 0 }
-    else if (bumpType == 'minor') { minor += 1; patch = 0 }
-    else { patch += 1 }
-
-    def newUmbrella = major.toString() + '.' + minor.toString() + '.' + patch.toString()
-
-    def updatedJson = groovy.json.JsonOutput.prettyPrint(
-        groovy.json.JsonOutput.toJson([
-            test    : newTest,
-            test1   : newTest1,
-            umbrella: newUmbrella
-        ])
-    )
-
-    return [
-        updatedJson : updatedJson,
-        newTag      : 'v' + newUmbrella,
-        newUmbrella : newUmbrella,
-        newTest     : newTest,
-        newTest1    : newTest1
-    ]
-}
-
 pipeline {
     agent any
 
@@ -56,14 +10,9 @@ pipeline {
     environment {
         GIT_USER_EMAIL = "rohit.sharma@alliedmed.co.in"
         GIT_USER_NAME  = "Rohitsss-lab"
-        GIT_REPO_URL   = "https://github.com/Rohitsss-lab/umbrella.git"
     }
 
     stages {
-
-        stage('Init') {
-            steps { echo "PIPELINE VERSION: FINAL_V4" }
-        }
 
         stage('Clean workspace') {
             steps { cleanWs() }
@@ -73,82 +22,88 @@ pipeline {
             steps {
                 git branch: 'main',
                     credentialsId: 'github-token',
-                    url: env.GIT_REPO_URL
+                    url: 'https://github.com/Rohitsss-lab/umbrella.git'
             }
         }
 
-        stage('Process Versions') {
+        stage('Process & Push') {
             steps {
-                script {
-                    // ✅ Extract to plain local Strings immediately — never use params.X directly in GStrings
-                    String repoName    = (params.REPO_NAME    ?: '').trim().toLowerCase()
-                    String repoVersion = (params.REPO_VERSION ?: '').trim()
-                    String bumpType    = (params.BUMP_TYPE    ?: 'patch').trim()
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-token',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_TOKEN'
+                )]) {
+                    bat '''
+                        @echo off
+                        setlocal enabledelayedexpansion
 
-                    echo "DEBUG repoName=" + repoName
-                    echo "DEBUG repoVersion=" + repoVersion
+                        REM Read inputs from Jenkins params (passed as env vars automatically)
+                        set REPO=%REPO_NAME%
+                        set VER=%REPO_VERSION%
+                        set BUMP=%BUMP_TYPE%
 
-                    if (!repoName || !repoVersion) {
-                        error("REPO_NAME or REPO_VERSION is empty")
-                    }
+                        echo DEBUG REPO=%REPO% VER=%VER% BUMP=%BUMP%
 
-                    String jsonText = readFile('versions.json')
-                    def result = processVersions(jsonText, repoName, repoVersion, bumpType)
+                        REM Parse versions.json using PowerShell
+                        for /f "delims=" %%i in ('powershell -NoProfile -Command "
+                            $j = Get-Content versions.json | ConvertFrom-Json;
+                            Write-Output ($j.test + ' ' + $j.test1 + ' ' + $j.umbrella)
+                        "') do set VERSIONS=%%i
 
-                    writeFile file: 'versions.json', text: result.updatedJson
+                        for /f "tokens=1,2,3" %%a in ("!VERSIONS!") do (
+                            set CURR_TEST=%%a
+                            set CURR_TEST1=%%b
+                            set CURR_UMBRELLA=%%c
+                        )
 
-                    // ✅ Store plain Strings only
-                    env.NEW_TAG       = result.newTag
-                    env.NEW_VERSION   = result.newUmbrella
-                    env.REPO1_VERSION = result.newTest
-                    env.REPO2_VERSION = result.newTest1
+                        echo Current test=!CURR_TEST! test1=!CURR_TEST1! umbrella=!CURR_UMBRELLA!
 
-                    echo "Result: test=" + result.newTest + " test1=" + result.newTest1 + " umbrella=" + result.newUmbrella
-                }
-            }
-        }
+                        REM Update the right repo version
+                        set NEW_TEST=!CURR_TEST!
+                        set NEW_TEST1=!CURR_TEST1!
 
-        stage('Commit & Push') {
-            steps {
-                script {
-                    // ✅ Pull env vars into plain local Strings BEFORE the withCredentials block
-                    // This prevents GString closures from capturing CPS scope
-                    String newTag     = env.NEW_TAG
-                    String newVersion = env.NEW_VERSION
-                    String repoName   = (params.REPO_NAME    ?: '').trim()
-                    String repoVer    = (params.REPO_VERSION ?: '').trim()
-                    String gitEmail   = env.GIT_USER_EMAIL
-                    String gitName    = env.GIT_USER_NAME
+                        if /i "!REPO!"=="test"  set NEW_TEST=!VER!
+                        if /i "!REPO!"=="test1" set NEW_TEST1=!VER!
 
-                    withCredentials([usernamePassword(
-                        credentialsId: 'github-token',
-                        usernameVariable: 'GIT_USER',
-                        passwordVariable: 'GIT_TOKEN'
-                    )]) {
-                        String gitUser  = env.GIT_USER
-                        String gitToken = env.GIT_TOKEN
+                        REM Bump umbrella version via PowerShell
+                        for /f "delims=" %%i in ('powershell -NoProfile -Command "
+                            $parts = '!CURR_UMBRELLA!'.Split('.');
+                            $major = [int]$parts[0];
+                            $minor = [int]$parts[1];
+                            $patch = [int]$parts[2];
+                            if ('!BUMP!' -eq 'major') { $major++; $minor=0; $patch=0 }
+                            elseif ('!BUMP!' -eq 'minor') { $minor++; $patch=0 }
+                            else { $patch++ }
+                            Write-Output ($major.ToString() + '.' + $minor.ToString() + '.' + $patch.ToString())
+                        "') do set NEW_UMBRELLA=%%i
 
-                        // ✅ Use plain String concatenation — zero GString interpolation
-                        bat 'git config user.email "' + gitEmail + '"'
-                        bat 'git config user.name "' + gitName + '"'
-                        bat 'git remote set-url origin https://' + gitUser + ':' + gitToken + '@github.com/Rohitsss-lab/umbrella.git'
-                        bat 'git add versions.json'
-                        bat 'git commit -m "chore: ' + repoName + ' updated to ' + repoVer + '" || echo No changes'
-                        bat 'git tag -a ' + newTag + ' -m "Umbrella ' + newTag + '" || echo Tag exists'
-                        bat 'git push origin main --tags'
-                    }
+                        echo New umbrella=!NEW_UMBRELLA!
+                        set NEW_TAG=v!NEW_UMBRELLA!
+
+                        REM Write updated versions.json via PowerShell
+                        powershell -NoProfile -Command "
+                            $obj = [ordered]@{ test='!NEW_TEST!'; test1='!NEW_TEST1!'; umbrella='!NEW_UMBRELLA!' };
+                            $obj | ConvertTo-Json | Set-Content versions.json
+                        "
+
+                        REM Git operations
+                        git config user.email "%GIT_USER_EMAIL%"
+                        git config user.name  "%GIT_USER_NAME%"
+                        git remote set-url origin https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/umbrella.git
+                        git add versions.json
+                        git commit -m "chore: !REPO! updated to !VER!" || echo No changes to commit
+                        git tag -a !NEW_TAG! -m "Umbrella !NEW_TAG!" || echo Tag already exists
+                        git push origin main --tags
+
+                        echo SUCCESS tag=!NEW_TAG! test=!NEW_TEST! test1=!NEW_TEST1!
+                    '''
                 }
             }
         }
     }
 
     post {
-        success {
-            echo "SUCCESS: " + env.NEW_TAG
-            echo "test=" + env.REPO1_VERSION + " test1=" + env.REPO2_VERSION
-        }
-        failure {
-            echo "FAILED"
-        }
+        success { echo "Pipeline completed successfully" }
+        failure { echo "Pipeline failed" }
     }
 }
