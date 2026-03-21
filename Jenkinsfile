@@ -23,132 +23,139 @@ pipeline {
             }
         }
 
-       stage('Read umbrella current version') {
-    steps {
-        script {
-            bat "git fetch --tags"
+        stage('Read umbrella current version') {
+            steps {
+                script {
+                    bat "git fetch --tags"
 
-            def allTags = bat(
-                script: "git tag",
-                returnStdout: true
-            ).trim()
+                    def allTagsRaw = bat(
+                        script: "git tag",
+                        returnStdout: true
+                    ).trim()
 
-            def latestTag = 'v1.0.0'
+                    // plain variables — no closures, no collection methods
+                    def bestMajor = 1
+                    def bestMinor = 0
+                    def bestPatch = 0
 
-            if (allTags) {
-                def tagList = allTags.readLines()
-                    .findAll { it.trim().matches('v[0-9]+\\.[0-9]+\\.[0-9]+') }
-                    .collect { it.trim() }
-
-                if (tagList) {
-                    // Sort numerically using max comparison instead of .sort()
-                    def best = tagList[0]
-                    for (t in tagList) {
-                        def bp = best.replace('v','').tokenize('.')
-                        def tp = t.replace('v','').tokenize('.')
-                        def bMajor = bp[0].toInteger()
-                        def bMinor = bp[1].toInteger()
-                        def bPatch = bp[2].toInteger()
-                        def tMajor = tp[0].toInteger()
-                        def tMinor = tp[1].toInteger()
-                        def tPatch = tp[2].toInteger()
-                        if (tMajor > bMajor ||
-                           (tMajor == bMajor && tMinor > bMinor) ||
-                           (tMajor == bMajor && tMinor == bMinor && tPatch > bPatch)) {
-                            best = t
+                    if (allTagsRaw) {
+                        def lines = allTagsRaw.split('\n')
+                        for (int i = 0; i < lines.size(); i++) {
+                            def line = lines[i].trim()
+                            if (line ==~ /v[0-9]+\.[0-9]+\.[0-9]+/) {
+                                def v = line.replace('v', '')
+                                def p = v.split('\\.')
+                                def maj = p[0].toInteger()
+                                def min = p[1].toInteger()
+                                def pat = p[2].toInteger()
+                                if (maj > bestMajor ||
+                                   (maj == bestMajor && min > bestMinor) ||
+                                   (maj == bestMajor && min == bestMinor && pat > bestPatch)) {
+                                    bestMajor = maj
+                                    bestMinor = min
+                                    bestPatch = pat
+                                }
+                            }
                         }
                     }
-                    latestTag = best
+
+                    echo "Latest umbrella: v${bestMajor}.${bestMinor}.${bestPatch}"
+
+                    bestPatch = bestPatch + 1
+
+                    env.NEW_VERSION = "${bestMajor}.${bestMinor}.${bestPatch}"
+                    env.NEW_TAG     = "v${env.NEW_VERSION}"
+
+                    echo "Umbrella bumping to: ${env.NEW_VERSION}"
+                    echo "Triggered by: ${params.REPO_NAME} @ ${params.REPO_VERSION}"
                 }
             }
-
-            echo "Latest umbrella tag: ${latestTag}"
-
-            def version = latestTag.replace("v", "")
-            def parts   = version.tokenize('.')
-
-            def major = parts[0].toInteger()
-            def minor = parts[1].toInteger()
-            def patch = parts[2].toInteger() + 1
-
-            env.NEW_VERSION = "${major}.${minor}.${patch}"
-            env.NEW_TAG     = "v${env.NEW_VERSION}"
-
-            echo "Umbrella bumping to: ${env.NEW_VERSION}"
-            echo "Triggered by: ${params.REPO_NAME} @ ${params.REPO_VERSION}"
         }
-    }
-}
+
         stage('Read latest version of both repos') {
-    steps {
-        withCredentials([usernamePassword(
-            credentialsId: 'github-token',
-            usernameVariable: 'GIT_USER',
-            passwordVariable: 'GIT_TOKEN'
-        )]) {
-            script {
-                def repo1Raw = bat(
-                    script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git",
-                    returnStdout: true
-                ).trim()
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-token',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_TOKEN'
+                )]) {
+                    script {
+                        def repo1Raw = bat(
+                            script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git",
+                            returnStdout: true
+                        ).trim()
 
-                def repo2Raw = bat(
-                    script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test1.git",
-                    returnStdout: true
-                ).trim()
+                        def repo2Raw = bat(
+                            script: "git ls-remote --tags https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test1.git",
+                            returnStdout: true
+                        ).trim()
 
-                // Find numerically latest version from raw ls-remote output
-                def findLatest = { raw ->
-                    def versions = raw.readLines()
-                        .findAll { it.contains('refs/tags/v') && !it.contains('^{}') }
-                        .collect { it.replaceAll('.*refs/tags/v', '').trim() }
-                        .findAll { it.matches('[0-9]+\\.[0-9]+\\.[0-9]+') }
-
-                    if (!versions) return '1.0.0'
-
-                    def best = versions[0]
-                    for (v in versions) {
-                        def bp = best.tokenize('.')
-                        def vp = v.tokenize('.')
-                        def bMaj = bp[0].toInteger()
-                        def bMin = bp[1].toInteger()
-                        def bPat = bp[2].toInteger()
-                        def vMaj = vp[0].toInteger()
-                        def vMin = vp[1].toInteger()
-                        def vPat = vp[2].toInteger()
-                        if (vMaj > bMaj ||
-                           (vMaj == bMaj && vMin > bMin) ||
-                           (vMaj == bMaj && vMin == bMin && vPat > bPat)) {
-                            best = v
+                        // Find latest version from repo1 — plain for loop, no closures
+                        def r1Maj = 1; def r1Min = 0; def r1Pat = 0
+                        def r1Lines = repo1Raw.split('\n')
+                        for (int i = 0; i < r1Lines.size(); i++) {
+                            def line = r1Lines[i].trim()
+                            if (line.contains('refs/tags/v') && !line.contains('^{}')) {
+                                def ver = line.replaceAll('.*refs/tags/v', '').trim()
+                                if (ver ==~ /[0-9]+\.[0-9]+\.[0-9]+/) {
+                                    def p = ver.split('\\.')
+                                    def maj = p[0].toInteger()
+                                    def min = p[1].toInteger()
+                                    def pat = p[2].toInteger()
+                                    if (maj > r1Maj ||
+                                       (maj == r1Maj && min > r1Min) ||
+                                       (maj == r1Maj && min == r1Min && pat > r1Pat)) {
+                                        r1Maj = maj; r1Min = min; r1Pat = pat
+                                    }
+                                }
+                            }
                         }
+                        def repo1Tag = "${r1Maj}.${r1Min}.${r1Pat}"
+
+                        // Find latest version from repo2 — plain for loop, no closures
+                        def r2Maj = 1; def r2Min = 0; def r2Pat = 0
+                        def r2Lines = repo2Raw.split('\n')
+                        for (int i = 0; i < r2Lines.size(); i++) {
+                            def line = r2Lines[i].trim()
+                            if (line.contains('refs/tags/v') && !line.contains('^{}')) {
+                                def ver = line.replaceAll('.*refs/tags/v', '').trim()
+                                if (ver ==~ /[0-9]+\.[0-9]+\.[0-9]+/) {
+                                    def p = ver.split('\\.')
+                                    def maj = p[0].toInteger()
+                                    def min = p[1].toInteger()
+                                    def pat = p[2].toInteger()
+                                    if (maj > r2Maj ||
+                                       (maj == r2Maj && min > r2Min) ||
+                                       (maj == r2Maj && min == r2Min && pat > r2Pat)) {
+                                        r2Maj = maj; r2Min = min; r2Pat = pat
+                                    }
+                                }
+                            }
+                        }
+                        def repo2Tag = "${r2Maj}.${r2Min}.${r2Pat}"
+
+                        echo "test  latest: ${repo1Tag}"
+                        echo "test1 latest: ${repo2Tag}"
+                        echo "Triggered by REPO_NAME:    ${params.REPO_NAME}"
+                        echo "Triggered by REPO_VERSION: ${params.REPO_VERSION}"
+
+                        if (params.REPO_NAME == 'test') {
+                            env.REPO1_VERSION = params.REPO_VERSION
+                            env.REPO2_VERSION = repo2Tag
+                        } else if (params.REPO_NAME == 'test1') {
+                            env.REPO1_VERSION = repo1Tag
+                            env.REPO2_VERSION = params.REPO_VERSION
+                        } else {
+                            env.REPO1_VERSION = repo1Tag
+                            env.REPO2_VERSION = repo2Tag
+                        }
+
+                        echo "Final → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
                     }
-                    return best
                 }
-
-                def repo1Tag = findLatest(repo1Raw)
-                def repo2Tag = findLatest(repo2Raw)
-
-                echo "test  latest from remote: ${repo1Tag}"
-                echo "test1 latest from remote: ${repo2Tag}"
-                echo "Triggered by REPO_NAME:    ${params.REPO_NAME}"
-                echo "Triggered by REPO_VERSION: ${params.REPO_VERSION}"
-
-                if (params.REPO_NAME == 'test') {
-                    env.REPO1_VERSION = params.REPO_VERSION
-                    env.REPO2_VERSION = repo2Tag
-                } else if (params.REPO_NAME == 'test1') {
-                    env.REPO1_VERSION = repo1Tag
-                    env.REPO2_VERSION = params.REPO_VERSION
-                } else {
-                    env.REPO1_VERSION = repo1Tag
-                    env.REPO2_VERSION = repo2Tag
-                }
-
-                echo "Final → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
             }
         }
-    }
-}
+
         stage('Update versions.json') {
             steps {
                 script {
