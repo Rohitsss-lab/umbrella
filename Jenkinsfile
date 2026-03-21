@@ -29,18 +29,18 @@ pipeline {
             }
         }
 
-        stage('Read & Process Versions') {
+        stage('Process Versions') {
             steps {
                 script {
 
-                    // 🔥 Normalize input (fixes your main issue)
-                    def repoName    = params.REPO_NAME?.trim().toLowerCase()
+                    // ✅ Normalize input
+                    def repoName    = params.REPO_NAME?.trim()?.toLowerCase()
                     def repoVersion = params.REPO_VERSION?.trim()
 
                     echo "DEBUG → REPO_NAME='${repoName}'"
                     echo "DEBUG → REPO_VERSION='${repoVersion}'"
 
-                    // ✅ Parse JSON safely (NO regex)
+                    // ✅ SAFE JSON parsing (NO regex)
                     def json = new groovy.json.JsonSlurper().parseText(readFile('versions.json'))
 
                     def currentTest     = json.test
@@ -49,7 +49,7 @@ pipeline {
 
                     echo "Current → test:${currentTest} | test1:${currentTest1} | umbrella:${umbrellaVersion}"
 
-                    // ✅ Decide updated values
+                    // ✅ Decide updates
                     def newTest  = currentTest
                     def newTest1 = currentTest1
 
@@ -62,26 +62,33 @@ pipeline {
                         echo "✅ Updating TEST1 → ${newTest1}"
 
                     } else {
-                        echo "⚠️ Unknown repo → no repo update"
+                        echo "⚠️ Unknown repo"
                     }
 
-                    // ✅ Bump umbrella version
-                    def parts = umbrellaVersion.split('\\.')
-                    def newUmbrella = ""
+                    // ✅ Version bump (NO regex)
+                    def parts = umbrellaVersion.tokenize('.')
+
+                    def major = parts[0].toInteger()
+                    def minor = parts[1].toInteger()
+                    def patch = parts[2].toInteger()
 
                     if (params.BUMP_TYPE == 'major') {
-                        newUmbrella = "${parts[0].toInteger() + 1}.0.0"
+                        major += 1
+                        minor = 0
+                        patch = 0
                     } else if (params.BUMP_TYPE == 'minor') {
-                        newUmbrella = "${parts[0]}.${parts[1].toInteger() + 1}.0"
+                        minor += 1
+                        patch = 0
                     } else {
-                        newUmbrella = "${parts[0]}.${parts[1]}.${parts[2].toInteger() + 1}"
+                        patch += 1
                     }
 
+                    def newUmbrella = "${major}.${minor}.${patch}"
                     def newTag = "v${newUmbrella}"
 
                     echo "New → test:${newTest} | test1:${newTest1} | umbrella:${newUmbrella}"
 
-                    // ✅ Write updated JSON
+                    // ✅ Write JSON
                     def updatedJson = groovy.json.JsonOutput.prettyPrint(
                         groovy.json.JsonOutput.toJson([
                             test    : newTest,
@@ -91,9 +98,8 @@ pipeline {
                     )
 
                     writeFile file: 'versions.json', text: updatedJson
-                    echo "Updated versions.json:\n${updatedJson}"
 
-                    // Save env for next stage
+                    // ✅ Save env
                     env.NEW_TAG       = newTag
                     env.NEW_VERSION   = newUmbrella
                     env.REPO1_VERSION = newTest
@@ -114,7 +120,7 @@ pipeline {
                         git config user.name  "${GIT_USER_NAME}"
                         git remote set-url origin https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/umbrella.git
                         git add versions.json
-                        git commit -m "chore: ${params.REPO_NAME} updated to ${params.REPO_VERSION} [skip ci]" || echo No changes
+                        git commit -m "update ${params.REPO_NAME} to ${params.REPO_VERSION}" || echo No changes
                         git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG}" || echo Tag exists
                         git push origin main --tags
                     """
@@ -125,11 +131,11 @@ pipeline {
 
     post {
         success {
-            echo "✅ SUCCESS → Umbrella ${env.NEW_TAG}"
+            echo "✅ SUCCESS → ${env.NEW_TAG}"
             echo "📦 test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
         }
         failure {
-            echo "❌ Pipeline failed"
+            echo "❌ FAILED"
         }
     }
 }
