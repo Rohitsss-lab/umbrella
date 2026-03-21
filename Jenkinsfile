@@ -15,6 +15,12 @@ pipeline {
 
     stages {
 
+        stage('Init') {
+            steps {
+                echo "PIPELINE VERSION: FINAL_NO_REGEX_V1"
+            }
+        }
+
         stage('Clean workspace') {
             steps {
                 cleanWs()
@@ -33,14 +39,19 @@ pipeline {
             steps {
                 script {
 
-                    // ✅ Normalize input
+                    // ✅ Normalize inputs (fix for test issue)
                     def repoName    = params.REPO_NAME?.trim()?.toLowerCase()
                     def repoVersion = params.REPO_VERSION?.trim()
 
                     echo "DEBUG → REPO_NAME='${repoName}'"
                     echo "DEBUG → REPO_VERSION='${repoVersion}'"
 
-                    // ✅ SAFE JSON parsing (NO regex)
+                    // ❗ Validate input
+                    if (!repoName || !repoVersion) {
+                        error "REPO_NAME or REPO_VERSION is empty"
+                    }
+
+                    // ✅ Read JSON safely
                     def json = new groovy.json.JsonSlurper().parseText(readFile('versions.json'))
 
                     def currentTest     = json.test
@@ -49,7 +60,7 @@ pipeline {
 
                     echo "Current → test:${currentTest} | test1:${currentTest1} | umbrella:${umbrellaVersion}"
 
-                    // ✅ Decide updates
+                    // ✅ Update correct repo
                     def newTest  = currentTest
                     def newTest1 = currentTest1
 
@@ -62,10 +73,10 @@ pipeline {
                         echo "✅ Updating TEST1 → ${newTest1}"
 
                     } else {
-                        echo "⚠️ Unknown repo"
+                        error "Invalid REPO_NAME: ${repoName}"
                     }
 
-                    // ✅ Version bump (NO regex)
+                    // ✅ Version bump logic
                     def parts = umbrellaVersion.tokenize('.')
 
                     def major = parts[0].toInteger()
@@ -88,7 +99,7 @@ pipeline {
 
                     echo "New → test:${newTest} | test1:${newTest1} | umbrella:${newUmbrella}"
 
-                    // ✅ Write JSON
+                    // ✅ Write updated JSON
                     def updatedJson = groovy.json.JsonOutput.prettyPrint(
                         groovy.json.JsonOutput.toJson([
                             test    : newTest,
@@ -99,7 +110,7 @@ pipeline {
 
                     writeFile file: 'versions.json', text: updatedJson
 
-                    // ✅ Save env
+                    // ✅ Save for next stage
                     env.NEW_TAG       = newTag
                     env.NEW_VERSION   = newUmbrella
                     env.REPO1_VERSION = newTest
@@ -120,7 +131,7 @@ pipeline {
                         git config user.name  "${GIT_USER_NAME}"
                         git remote set-url origin https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/umbrella.git
                         git add versions.json
-                        git commit -m "update ${params.REPO_NAME} to ${params.REPO_VERSION}" || echo No changes
+                        git commit -m "chore: ${params.REPO_NAME} updated to ${params.REPO_VERSION}" || echo No changes
                         git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG}" || echo Tag exists
                         git push origin main --tags
                     """
@@ -138,4 +149,4 @@ pipeline {
             echo "❌ FAILED"
         }
     }
-}
+}s
