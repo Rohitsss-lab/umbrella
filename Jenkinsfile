@@ -11,6 +11,7 @@ pipeline {
         GIT_USER_EMAIL = "rohit.sharma@alliedmed.co.in"
         GIT_USER_NAME  = "Rohitsss-lab"
         GIT_REPO_URL   = "https://github.com/Rohitsss-lab/umbrella.git"
+        PYTHON         = "\"C:\\Program Files\\Python313\\python.exe\""
     }
 
     stages {
@@ -52,7 +53,6 @@ pipeline {
                     def minor = (parts.size() > 1 && parts.get(1)) ? parts.get(1).toInteger() : 0
                     def patch = (parts.size() > 2 && parts.get(2)) ? parts.get(2).toInteger() : 0
 
-                    // Rollover logic — same as test and test1
                     if (patch < 9) {
                         patch = patch + 1
                     } else if (minor < 9) {
@@ -93,14 +93,19 @@ pipeline {
                             def versions = raw.readLines()
                                 .findAll { it.contains('refs/tags/v') && !it.contains('^{}') }
                                 .collect { it.replaceAll('.*refs/tags/v', '').trim() }
-                                .findAll  { it.matches('[0-9]+\\.[0-9]+\\.[0-9]+') }
-                                .sort     { a, b ->
-                                    def ap = a.tokenize('.').collect { it.toInteger() }
-                                    def bp = b.tokenize('.').collect { it.toInteger() }
-                                    bp.get(0) <=> ap.get(0) ?: bp.get(1) <=> ap.get(1) ?: bp.get(2) <=> ap.get(2)
-                                }
+                                .findAll { it.matches('[0-9]+\\.[0-9]+\\.[0-9]+') }
 
-                            return versions ? versions.get(0) : '1.0.0'
+                            if (!versions) return '1.0.0'
+
+                            def versionList = versions.join(' ')
+                            def latest = bat(
+                                script: """@echo off
+"C:\\Program Files\\Python313\\python.exe" -c "versions='${versionList}'.split(); versions.sort(key=lambda v: list(map(int, v.split('.'))), reverse=True); print(versions[0])"
+""",
+                                returnStdout: true
+                            ).trim().readLines().last().trim()
+
+                            return latest ?: '1.0.0'
                         }
 
                         def testUrl  = "https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git"
@@ -119,7 +124,6 @@ pipeline {
                             env.REPO1_VERSION = repo1Tag
                             env.REPO2_VERSION = params.REPO_VERSION
                         } else {
-                            // manual run — pull latest from both repos
                             env.REPO1_VERSION = repo1Tag
                             env.REPO2_VERSION = repo2Tag
                         }
