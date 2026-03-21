@@ -39,53 +39,48 @@ pipeline {
     }
 }
         stage('Read umbrella current version') {
-            steps {
-                script {
-                    bat "git fetch --tags"
+    steps {
+        script {
+            bat "git fetch --tags"
 
-                    def allTagsRaw = bat(
-                        script: "git tag",
-                        returnStdout: true
-                    ).trim()
+            def allTagsRaw = bat(
+                script: "git tag",
+                returnStdout: true
+            ).trim()
 
-                    // plain variables — no closures, no collection methods
-                    def bestMajor = 1
-                    def bestMinor = 0
-                    def bestPatch = 0
+            def bestMajor = 1
+            def bestMinor = 0
+            def bestPatch = 0
 
-                    if (allTagsRaw) {
-                        def lines = allTagsRaw.split('\n')
-                        for (int i = 0; i < lines.size(); i++) {
-                            def line = lines[i].trim()
-                            if (line ==~ /v[0-9]+\.[0-9]+\.[0-9]+/) {
-                                def v = line.replace('v', '')
-                                def p = v.split('\\.')
-                                def maj = p[0].toInteger()
-                                def min = p[1].toInteger()
-                                def pat = p[2].toInteger()
-                                if (maj > bestMajor ||
-                                   (maj == bestMajor && min > bestMinor) ||
-                                   (maj == bestMajor && min == bestMinor && pat > bestPatch)) {
-                                    bestMajor = maj
-                                    bestMinor = min
-                                    bestPatch = pat
-                                }
-                            }
+            if (allTagsRaw) {
+                // Split on both \r\n and \n, skip first line (bat command echo)
+                def lines = allTagsRaw.replaceAll('\r', '').split('\n')
+                for (int i = 1; i < lines.size(); i++) {  // start at 1 to skip command echo
+                    def line = lines[i].trim()
+                    if (line ==~ /v[0-9]+\.[0-9]+\.[0-9]+/) {
+                        def p = line.replace('v', '').split('\\.')
+                        def maj = p[0].toInteger()
+                        def min = p[1].toInteger()
+                        def pat = p[2].toInteger()
+                        if (maj > bestMajor ||
+                           (maj == bestMajor && min > bestMinor) ||
+                           (maj == bestMajor && min == bestMinor && pat > bestPatch)) {
+                            bestMajor = maj
+                            bestMinor = min
+                            bestPatch = pat
                         }
                     }
-
-                    echo "Latest umbrella: v${bestMajor}.${bestMinor}.${bestPatch}"
-
-                    bestPatch = bestPatch + 1
-
-                    env.NEW_VERSION = "${bestMajor}.${bestMinor}.${bestPatch}"
-                    env.NEW_TAG     = "v${env.NEW_VERSION}"
-
-                    echo "Umbrella bumping to: ${env.NEW_VERSION}"
-                    echo "Triggered by: ${params.REPO_NAME} @ ${params.REPO_VERSION}"
                 }
             }
+
+            echo "Latest umbrella: v${bestMajor}.${bestMinor}.${bestPatch}"
+            bestPatch = bestPatch + 1
+            env.NEW_VERSION = "${bestMajor}.${bestMinor}.${bestPatch}"
+            env.NEW_TAG     = "v${env.NEW_VERSION}"
+            echo "Umbrella bumping to: ${env.NEW_VERSION}"
         }
+    }
+}
 
         stage('Read latest version of both repos') {
             steps {
