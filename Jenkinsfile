@@ -1,4 +1,3 @@
-// ✅ MUST be outside pipeline{} block to work properly
 @NonCPS
 def processVersions(String jsonText, String repoName, String repoVersion, String bumpType) {
     def json         = new groovy.json.JsonSlurper().parseText(jsonText)
@@ -14,7 +13,7 @@ def processVersions(String jsonText, String repoName, String repoVersion, String
     } else if (repoName == 'test1') {
         newTest1 = repoVersion
     } else {
-        throw new IllegalArgumentException("Invalid REPO_NAME: ${repoName}")
+        throw new IllegalArgumentException("Invalid REPO_NAME: " + repoName)
     }
 
     def parts = umbrellaVer.split('\\.')
@@ -22,15 +21,11 @@ def processVersions(String jsonText, String repoName, String repoVersion, String
     def minor = parts[1].toInteger()
     def patch = parts[2].toInteger()
 
-    if (bumpType == 'major') {
-        major += 1; minor = 0; patch = 0
-    } else if (bumpType == 'minor') {
-        minor += 1; patch = 0
-    } else {
-        patch += 1
-    }
+    if (bumpType == 'major') { major += 1; minor = 0; patch = 0 }
+    else if (bumpType == 'minor') { minor += 1; patch = 0 }
+    else { patch += 1 }
 
-    def newUmbrella = "${major}.${minor}.${patch}".toString()
+    def newUmbrella = major.toString() + '.' + minor.toString() + '.' + patch.toString()
 
     def updatedJson = groovy.json.JsonOutput.prettyPrint(
         groovy.json.JsonOutput.toJson([
@@ -42,7 +37,7 @@ def processVersions(String jsonText, String repoName, String repoVersion, String
 
     return [
         updatedJson : updatedJson,
-        newTag      : "v${newUmbrella}".toString(),
+        newTag      : 'v' + newUmbrella,
         newUmbrella : newUmbrella,
         newTest     : newTest,
         newTest1    : newTest1
@@ -67,15 +62,11 @@ pipeline {
     stages {
 
         stage('Init') {
-            steps {
-                echo "PIPELINE VERSION: FINAL_NO_REGEX_V3"
-            }
+            steps { echo "PIPELINE VERSION: FINAL_V4" }
         }
 
         stage('Clean workspace') {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
 
         stage('Checkout umbrella') {
@@ -89,52 +80,63 @@ pipeline {
         stage('Process Versions') {
             steps {
                 script {
-                    def repoName    = params.REPO_NAME?.trim()?.toLowerCase()
-                    def repoVersion = params.REPO_VERSION?.trim()
+                    // ✅ Extract to plain local Strings immediately — never use params.X directly in GStrings
+                    String repoName    = (params.REPO_NAME    ?: '').trim().toLowerCase()
+                    String repoVersion = (params.REPO_VERSION ?: '').trim()
+                    String bumpType    = (params.BUMP_TYPE    ?: 'patch').trim()
 
-                    echo "DEBUG → REPO_NAME='${repoName}'"
-                    echo "DEBUG → REPO_VERSION='${repoVersion}'"
+                    echo "DEBUG repoName=" + repoName
+                    echo "DEBUG repoVersion=" + repoVersion
 
                     if (!repoName || !repoVersion) {
-                        error "REPO_NAME or REPO_VERSION is empty"
+                        error("REPO_NAME or REPO_VERSION is empty")
                     }
 
-                    // readFile stays here (it's a Pipeline step)
-                    def jsonText = readFile('versions.json')
+                    String jsonText = readFile('versions.json')
+                    def result = processVersions(jsonText, repoName, repoVersion, bumpType)
 
-                    // All non-serializable work happens inside @NonCPS method
-                    def result = processVersions(jsonText, repoName, repoVersion, params.BUMP_TYPE)
-
-                    // writeFile stays here (it's a Pipeline step)
                     writeFile file: 'versions.json', text: result.updatedJson
 
-                    // Store only plain Strings in env
+                    // ✅ Store plain Strings only
                     env.NEW_TAG       = result.newTag
                     env.NEW_VERSION   = result.newUmbrella
                     env.REPO1_VERSION = result.newTest
                     env.REPO2_VERSION = result.newTest1
 
-                    echo "New → test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION} | umbrella:${env.NEW_VERSION}"
+                    echo "Result: test=" + result.newTest + " test1=" + result.newTest1 + " umbrella=" + result.newUmbrella
                 }
             }
         }
 
         stage('Commit & Push') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'github-token',
-                    usernameVariable: 'GIT_USER',
-                    passwordVariable: 'GIT_TOKEN'
-                )]) {
-                    bat """
-                        git config user.email "${GIT_USER_EMAIL}"
-                        git config user.name  "${GIT_USER_NAME}"
-                        git remote set-url origin https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/umbrella.git
-                        git add versions.json
-                        git commit -m "chore: ${params.REPO_NAME} updated to ${params.REPO_VERSION}" || echo No changes
-                        git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG}" || echo Tag exists
-                        git push origin main --tags
-                    """
+                script {
+                    // ✅ Pull env vars into plain local Strings BEFORE the withCredentials block
+                    // This prevents GString closures from capturing CPS scope
+                    String newTag     = env.NEW_TAG
+                    String newVersion = env.NEW_VERSION
+                    String repoName   = (params.REPO_NAME    ?: '').trim()
+                    String repoVer    = (params.REPO_VERSION ?: '').trim()
+                    String gitEmail   = env.GIT_USER_EMAIL
+                    String gitName    = env.GIT_USER_NAME
+
+                    withCredentials([usernamePassword(
+                        credentialsId: 'github-token',
+                        usernameVariable: 'GIT_USER',
+                        passwordVariable: 'GIT_TOKEN'
+                    )]) {
+                        String gitUser  = env.GIT_USER
+                        String gitToken = env.GIT_TOKEN
+
+                        // ✅ Use plain String concatenation — zero GString interpolation
+                        bat 'git config user.email "' + gitEmail + '"'
+                        bat 'git config user.name "' + gitName + '"'
+                        bat 'git remote set-url origin https://' + gitUser + ':' + gitToken + '@github.com/Rohitsss-lab/umbrella.git'
+                        bat 'git add versions.json'
+                        bat 'git commit -m "chore: ' + repoName + ' updated to ' + repoVer + '" || echo No changes'
+                        bat 'git tag -a ' + newTag + ' -m "Umbrella ' + newTag + '" || echo Tag exists'
+                        bat 'git push origin main --tags'
+                    }
                 }
             }
         }
@@ -142,11 +144,11 @@ pipeline {
 
     post {
         success {
-            echo "✅ SUCCESS → ${env.NEW_TAG}"
-            echo "📦 test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
+            echo "SUCCESS: " + env.NEW_TAG
+            echo "test=" + env.REPO1_VERSION + " test1=" + env.REPO2_VERSION
         }
         failure {
-            echo "❌ FAILED"
+            echo "FAILED"
         }
     }
 }
