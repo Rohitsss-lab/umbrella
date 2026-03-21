@@ -2,108 +2,202 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'REPO_NAME',    defaultValue: '', description: 'Repo name (test/test1)')
-        string(name: 'REPO_VERSION', defaultValue: '', description: 'Repo version')
+        string(name: 'REPO_NAME',    defaultValue: 'test',  description: 'Which repo triggered this')
+        string(name: 'REPO_VERSION', defaultValue: '1.0.0', description: 'Version of that repo')
         string(name: 'BUMP_TYPE',    defaultValue: 'patch', description: 'patch/minor/major')
     }
 
     environment {
         GIT_USER_EMAIL = "rohit.sharma@alliedmed.co.in"
         GIT_USER_NAME  = "Rohitsss-lab"
+        GIT_REPO_URL   = "https://github.com/Rohitsss-lab/umbrella.git"
     }
 
     stages {
-
-        stage('Clean workspace') {
-            steps { cleanWs() }
-        }
 
         stage('Checkout umbrella') {
             steps {
                 git branch: 'main',
                     credentialsId: 'github-token',
-                    url: 'https://github.com/Rohitsss-lab/umbrella.git'
+                    url: env.GIT_REPO_URL
             }
         }
 
-        stage('Process & Push') {
+        stage('Read umbrella current version') {
+            steps {
+                script {
+                    bat "git fetch --tags"
+
+                    def allTags = bat(
+                        script: "git tag --sort=-v:refname",
+                        returnStdout: true
+                    ).trim()
+
+                    def latestTag = 'v1.0.0'
+
+                    if (allTags) {
+                        def tagList = allTags.readLines()
+                                      .findAll { it.trim().startsWith('v') }
+                        if (tagList) {
+                            latestTag = tagList[0].trim()
+                        }
+                    }
+
+                    echo "Latest umbrella tag: ${latestTag}"
+
+                    def version = latestTag.replace("v", "")
+                    def parts   = version.tokenize('.')
+
+                    def major = (parts.size() > 0 && parts[0]) ? parts[0].toInteger() : 1
+                    def minor = (parts.size() > 1 && parts[1]) ? parts[1].toInteger() : 0
+                    def patch = (parts.size() > 2 && parts[2]) ? parts[2].toInteger() : 0
+
+                    // Apply rollover logic matching test/test1 behaviour
+                    if (patch < 9) {
+                        patch = patch + 1
+                    } else if (minor < 9) {
+                        minor = minor + 1
+                        patch = 0
+                    } else {
+                        major = major + 1
+                        minor = 0
+                        patch = 0
+                    }
+
+                    env.NEW_VERSION = "${major}.${minor}.${patch}"
+                    env.NEW_TAG     = "v${env.NEW_VERSION}"
+
+                    echo "========================================="
+                    echo "  Umbrella bumping to : ${env.NEW_VERSION}"
+                    echo "  Triggered by        : ${params.REPO_NAME} @ v${params.REPO_VERSION}"
+                    echo "========================================="
+                }
+            }
+        }
+
+        stage('Read latest version of both repos') {
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'github-token',
                     usernameVariable: 'GIT_USER',
                     passwordVariable: 'GIT_TOKEN'
                 )]) {
-                    bat '''
-                        @echo off
-                        setlocal enabledelayedexpansion
+                    script {
 
-                        REM Read inputs from Jenkins params (passed as env vars automatically)
-                        set REPO=%REPO_NAME%
-                        set VER=%REPO_VERSION%
-                        set BUMP=%BUMP_TYPE%
+                        // Helper closure — gets latest vX.Y.Z tag from a repo
+                        def getLatestTag = { repoUrl ->
+                            def raw = bat(
+                                script: "git ls-remote --tags ${repoUrl}",
+                                returnStdout: true
+                            ).trim()
 
-                        echo DEBUG REPO=%REPO% VER=%VER% BUMP=%BUMP%
+                            // Exclude ^{} peeled refs, extract only clean X.Y.Z versions
+                            def versions = raw.readLines()
+                                .findAll { it.contains('refs/tags/v') && !it.contains('^{}') }
+                                .collect { it.replaceAll('.*refs/tags/v', '').trim() }
+                                .findAll  { it.matches('[0-9]+\\.[0-9]+\\.[0-9]+') }
+                                .sort     { a, b ->
+                                    def ap = a.tokenize('.').collect { it.toInteger() }
+                                    def bp = b.tokenize('.').collect { it.toInteger() }
+                                    bp[0] <=> ap[0] ?: bp[1] <=> ap[1] ?: bp[2] <=> ap[2]
+                                }
 
-                        REM Parse versions.json using PowerShell
-                        for /f "delims=" %%i in ('powershell -NoProfile -Command "
-                            $j = Get-Content versions.json | ConvertFrom-Json;
-                            Write-Output ($j.test + ' ' + $j.test1 + ' ' + $j.umbrella)
-                        "') do set VERSIONS=%%i
+                            return versions ? versions[0] : '1.0.0'
+                        }
 
-                        for /f "tokens=1,2,3" %%a in ("!VERSIONS!") do (
-                            set CURR_TEST=%%a
-                            set CURR_TEST1=%%b
-                            set CURR_UMBRELLA=%%c
-                        )
+                        def testUrl  = "https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git"
+                        def test1Url = "https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test1.git"
 
-                        echo Current test=!CURR_TEST! test1=!CURR_TEST1! umbrella=!CURR_UMBRELLA!
+                        def repo1Tag = getLatestTag(testUrl)
+                        def repo2Tag = getLatestTag(test1Url)
 
-                        REM Update the right repo version
-                        set NEW_TEST=!CURR_TEST!
-                        set NEW_TEST1=!CURR_TEST1!
+                        echo "test  latest tag from GitHub: v${repo1Tag}"
+                        echo "test1 latest tag from GitHub: v${repo2Tag}"
 
-                        if /i "!REPO!"=="test"  set NEW_TEST=!VER!
-                        if /i "!REPO!"=="test1" set NEW_TEST1=!VER!
+                        // Override whichever repo just triggered this run
+                        if (params.REPO_NAME == 'test') {
+                            env.REPO1_VERSION = params.REPO_VERSION
+                            env.REPO2_VERSION = repo2Tag
+                        } else if (params.REPO_NAME == 'test1') {
+                            env.REPO1_VERSION = repo1Tag
+                            env.REPO2_VERSION = params.REPO_VERSION
+                        } else {
+                            // manual run — pull latest from both repos
+                            env.REPO1_VERSION = repo1Tag
+                            env.REPO2_VERSION = repo2Tag
+                        }
 
-                        REM Bump umbrella version via PowerShell
-                        for /f "delims=" %%i in ('powershell -NoProfile -Command "
-                            $parts = '!CURR_UMBRELLA!'.Split('.');
-                            $major = [int]$parts[0];
-                            $minor = [int]$parts[1];
-                            $patch = [int]$parts[2];
-                            if ('!BUMP!' -eq 'major') { $major++; $minor=0; $patch=0 }
-                            elseif ('!BUMP!' -eq 'minor') { $minor++; $patch=0 }
-                            else { $patch++ }
-                            Write-Output ($major.ToString() + '.' + $minor.ToString() + '.' + $patch.ToString())
-                        "') do set NEW_UMBRELLA=%%i
+                        echo "========================================="
+                        echo "  test     : v${env.REPO1_VERSION}"
+                        echo "  test1    : v${env.REPO2_VERSION}"
+                        echo "  umbrella : v${env.NEW_VERSION}  ← bumping to this"
+                        echo "========================================="
+                    }
+                }
+            }
+        }
 
-                        echo New umbrella=!NEW_UMBRELLA!
-                        set NEW_TAG=v!NEW_UMBRELLA!
+        stage('Update versions.json') {
+            steps {
+                script {
+                    def jsonContent = groovy.json.JsonOutput.prettyPrint(
+                        groovy.json.JsonOutput.toJson([
+                            test    : env.REPO1_VERSION,
+                            test1   : env.REPO2_VERSION,
+                            umbrella: env.NEW_VERSION
+                        ])
+                    )
 
-                        REM Write updated versions.json via PowerShell
-                        powershell -NoProfile -Command "
-                            $obj = [ordered]@{ test='!NEW_TEST!'; test1='!NEW_TEST1!'; umbrella='!NEW_UMBRELLA!' };
-                            $obj | ConvertTo-Json | Set-Content versions.json
-                        "
+                    writeFile file: 'versions.json', text: jsonContent + '\n'
 
-                        REM Git operations
-                        git config user.email "%GIT_USER_EMAIL%"
-                        git config user.name  "%GIT_USER_NAME%"
+                    echo "========================================="
+                    echo "  versions.json written"
+                    echo "-----------------------------------------"
+                    echo "  test     : v${env.REPO1_VERSION}"
+                    echo "  test1    : v${env.REPO2_VERSION}"
+                    echo "  umbrella : v${env.NEW_VERSION}"
+                    echo "========================================="
+                }
+            }
+        }
+
+        stage('Commit and tag') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-token',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_TOKEN'
+                )]) {
+                    bat """
+                        git config user.email "${GIT_USER_EMAIL}"
+                        git config user.name  "${GIT_USER_NAME}"
                         git remote set-url origin https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/umbrella.git
                         git add versions.json
-                        git commit -m "chore: !REPO! updated to !VER!" || echo No changes to commit
-                        git tag -a !NEW_TAG! -m "Umbrella !NEW_TAG!" || echo Tag already exists
+                        git commit -m "chore: ${params.REPO_NAME} updated to v${params.REPO_VERSION} [skip ci]"
+                        git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG}"
                         git push origin main --tags
-
-                        echo SUCCESS tag=!NEW_TAG! test=!NEW_TEST! test1=!NEW_TEST1!
-                    '''
+                    """
                 }
             }
         }
     }
 
     post {
-        success { echo "Pipeline completed successfully" }
-        failure { echo "Pipeline failed" }
+        success {
+            echo "========================================="
+            echo "  SUCCESS"
+            echo "-----------------------------------------"
+            echo "  umbrella : ${env.NEW_TAG}"
+            echo "  test     : v${env.REPO1_VERSION}"
+            echo "  test1    : v${env.REPO2_VERSION}"
+            echo "  trigger  : ${params.REPO_NAME} @ v${params.REPO_VERSION}"
+            echo "========================================="
+        }
+        failure {
+            echo "Umbrella pipeline failed — no version bump occurred."
+        }
+        always {
+            cleanWs()
+        }
     }
 }
