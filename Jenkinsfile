@@ -11,6 +11,7 @@ pipeline {
         GIT_USER_EMAIL = "rohit.sharma@alliedmed.co.in"
         GIT_USER_NAME  = "Rohitsss-lab"
         GIT_REPO_URL   = "https://github.com/Rohitsss-lab/umbrella.git"
+        PYTHON         = "\"C:\\Program Files\\Python313\\python.exe\""
     }
 
     stages {
@@ -32,47 +33,70 @@ pipeline {
         stage('Read current versions') {
             steps {
                 script {
-                    def jsonText = readFile('versions.json').trim()
-                    echo "Current versions.json: ${jsonText}"
+                    // Write a Python helper script to parse versions.json
+                    writeFile file: 'read_versions.py', text: '''
+import json, sys
 
-                    // Extract umbrella version — immediately get string, never store matcher
-                    def umbrellaVersion = (jsonText =~ /"umbrella"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"/)[0][1]
-                    echo "Current umbrella: ${umbrellaVersion}"
+with open("versions.json") as f:
+    data = json.load(f)
 
-                    // Extract test1 first — more specific, must come before test
-                    def currentTest1 = (jsonText =~ /"test1"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"/)[0][1]
-                    echo "Current test1: ${currentTest1}"
+repo_name    = sys.argv[1]
+repo_version = sys.argv[2]
 
-                    // Extract test — remove test1 key first to avoid overlap
-                    def jsonNoTest1  = jsonText.replace('"test1"', '"SKIP"')
-                    def currentTest  = (jsonNoTest1 =~ /"test"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"/)[0][1]
-                    echo "Current test: ${currentTest}"
+# Parse umbrella version and bump patch
+parts = data["umbrella"].split(".")
+new_umbrella = f"{parts[0]}.{parts[1]}.{int(parts[2]) + 1}"
 
-                    // Bump umbrella patch version
-                    def parts = umbrellaVersion.split('\\.')
-                    def newUmbrella = "${parts[0]}.${parts[1]}.${(parts[2].toInteger() + 1)}"
-                    echo "New umbrella version: ${newUmbrella}"
+current_test  = data["test"]
+current_test1 = data["test1"]
+
+# Override triggered repo
+if repo_name == "test":
+    new_test  = repo_version
+    new_test1 = current_test1
+elif repo_name == "test1":
+    new_test  = current_test
+    new_test1 = repo_version
+else:
+    new_test  = current_test
+    new_test1 = current_test1
+
+# Print all values — one per line in fixed order
+print(new_umbrella)
+print(new_test)
+print(new_test1)
+'''
+
+                    def rawOutput = bat(
+                        script: "${env.PYTHON} read_versions.py ${params.REPO_NAME} ${params.REPO_VERSION}",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Python output: '${rawOutput}'"
+
+                    // Parse lines — skip first line (bat command echo)
+                    def lines = rawOutput.replaceAll('\r', '').split('\n')
+                    def resultLines = []
+                    for (int i = 0; i < lines.size(); i++) {
+                        def l = lines[i].trim()
+                        if (l.matches('[0-9]+\\.[0-9]+\\.[0-9]+')) {
+                            resultLines.add(l)
+                        }
+                    }
+
+                    echo "Parsed versions: ${resultLines}"
+
+                    // Write to temp files
+                    writeFile file: 'NEW_UMBRELLA_VERSION.txt', text: resultLines[0]
+                    writeFile file: 'NEW_TAG.txt',              text: "v${resultLines[0]}"
+                    writeFile file: 'REPO1_VERSION.txt',        text: resultLines[1]
+                    writeFile file: 'REPO2_VERSION.txt',        text: resultLines[2]
 
                     echo "REPO_NAME param:    '${params.REPO_NAME}'"
                     echo "REPO_VERSION param: '${params.REPO_VERSION}'"
-
-                    // Write all values to temp files — most reliable across stages
-                    writeFile file: 'NEW_UMBRELLA_VERSION.txt', text: newUmbrella
-                    writeFile file: 'NEW_TAG.txt',              text: "v${newUmbrella}"
-
-                    if (params.REPO_NAME == 'test') {
-                        writeFile file: 'REPO1_VERSION.txt', text: params.REPO_VERSION
-                        writeFile file: 'REPO2_VERSION.txt', text: currentTest1
-                        echo "test triggered → test=${params.REPO_VERSION} | test1=${currentTest1}"
-                    } else if (params.REPO_NAME == 'test1') {
-                        writeFile file: 'REPO1_VERSION.txt', text: currentTest
-                        writeFile file: 'REPO2_VERSION.txt', text: params.REPO_VERSION
-                        echo "test1 triggered → test=${currentTest} | test1=${params.REPO_VERSION}"
-                    } else {
-                        writeFile file: 'REPO1_VERSION.txt', text: currentTest
-                        writeFile file: 'REPO2_VERSION.txt', text: currentTest1
-                        echo "manual trigger → test=${currentTest} | test1=${currentTest1}"
-                    }
+                    echo "New umbrella:        ${resultLines[0]}"
+                    echo "New test:            ${resultLines[1]}"
+                    echo "New test1:           ${resultLines[2]}"
                 }
             }
         }
