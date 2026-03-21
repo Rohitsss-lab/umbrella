@@ -1,59 +1,123 @@
 pipeline {
     agent any
 
+    parameters {
+        string(name: 'REPO_NAME',    defaultValue: '', description: 'Repo name (test/test1)')
+        string(name: 'REPO_VERSION', defaultValue: '', description: 'Repo version')
+        string(name: 'BUMP_TYPE',    defaultValue: 'patch', description: 'patch/minor/major')
+    }
+
     environment {
-        SAMPLE_TEXT = "hello abc world 123"
+        GIT_USER_EMAIL = "rohit.sharma@alliedmed.co.in"
+        GIT_USER_NAME  = "Rohitsss-lab"
+        GIT_REPO_URL   = "https://github.com/Rohitsss-lab/umbrella.git"
     }
 
     stages {
 
-        stage('Print Input') {
+        stage('Clean workspace') {
             steps {
-                echo "Input Text: ${env.SAMPLE_TEXT}"
+                cleanWs()
             }
         }
 
-        stage('Regex Check') {
+        stage('Checkout umbrella') {
+            steps {
+                git branch: 'main',
+                    credentialsId: 'github-token',
+                    url: env.GIT_REPO_URL
+            }
+        }
+
+        stage('Read & Process Versions') {
             steps {
                 script {
-                    // Use only serializable result
-                    def found = env.SAMPLE_TEXT.contains("abc")
 
-                    if (found) {
-                        echo "Pattern 'abc' found"
+                    // 🔥 Normalize input (fixes your main issue)
+                    def repoName    = params.REPO_NAME?.trim().toLowerCase()
+                    def repoVersion = params.REPO_VERSION?.trim()
+
+                    echo "DEBUG → REPO_NAME='${repoName}'"
+                    echo "DEBUG → REPO_VERSION='${repoVersion}'"
+
+                    // ✅ Parse JSON safely (NO regex)
+                    def json = new groovy.json.JsonSlurper().parseText(readFile('versions.json'))
+
+                    def currentTest     = json.test
+                    def currentTest1    = json.test1
+                    def umbrellaVersion = json.umbrella
+
+                    echo "Current → test:${currentTest} | test1:${currentTest1} | umbrella:${umbrellaVersion}"
+
+                    // ✅ Decide updated values
+                    def newTest  = currentTest
+                    def newTest1 = currentTest1
+
+                    if (repoName == 'test') {
+                        newTest = repoVersion
+                        echo "✅ Updating TEST → ${newTest}"
+
+                    } else if (repoName == 'test1') {
+                        newTest1 = repoVersion
+                        echo "✅ Updating TEST1 → ${newTest1}"
+
                     } else {
-                        echo "Pattern 'abc' NOT found"
+                        echo "⚠️ Unknown repo → no repo update"
                     }
+
+                    // ✅ Bump umbrella version
+                    def parts = umbrellaVersion.split('\\.')
+                    def newUmbrella = ""
+
+                    if (params.BUMP_TYPE == 'major') {
+                        newUmbrella = "${parts[0].toInteger() + 1}.0.0"
+                    } else if (params.BUMP_TYPE == 'minor') {
+                        newUmbrella = "${parts[0]}.${parts[1].toInteger() + 1}.0"
+                    } else {
+                        newUmbrella = "${parts[0]}.${parts[1]}.${parts[2].toInteger() + 1}"
+                    }
+
+                    def newTag = "v${newUmbrella}"
+
+                    echo "New → test:${newTest} | test1:${newTest1} | umbrella:${newUmbrella}"
+
+                    // ✅ Write updated JSON
+                    def updatedJson = groovy.json.JsonOutput.prettyPrint(
+                        groovy.json.JsonOutput.toJson([
+                            test    : newTest,
+                            test1   : newTest1,
+                            umbrella: newUmbrella
+                        ])
+                    )
+
+                    writeFile file: 'versions.json', text: updatedJson
+                    echo "Updated versions.json:\n${updatedJson}"
+
+                    // Save env for next stage
+                    env.NEW_TAG       = newTag
+                    env.NEW_VERSION   = newUmbrella
+                    env.REPO1_VERSION = newTest
+                    env.REPO2_VERSION = newTest1
                 }
             }
         }
 
-        stage('Regex Extract') {
+        stage('Commit & Push') {
             steps {
-                script {
-                    // SAFE: returns String (Serializable)
-                    def result = env.SAMPLE_TEXT.find(/abc/)
-
-                    if (result) {
-                        echo "Extracted match: ${result}"
-                    } else {
-                        echo "No match extracted"
-                    }
-                }
-            }
-        }
-
-        stage('Advanced Regex Extract') {
-            steps {
-                script {
-                    // Extract numbers safely
-                    def number = extractNumber(env.SAMPLE_TEXT)
-
-                    if (number) {
-                        echo "Extracted number: ${number}"
-                    } else {
-                        echo "No number found"
-                    }
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-token',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_TOKEN'
+                )]) {
+                    bat """
+                        git config user.email "${GIT_USER_EMAIL}"
+                        git config user.name  "${GIT_USER_NAME}"
+                        git remote set-url origin https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/umbrella.git
+                        git add versions.json
+                        git commit -m "chore: ${params.REPO_NAME} updated to ${params.REPO_VERSION} [skip ci]" || echo No changes
+                        git tag -a ${env.NEW_TAG} -m "Umbrella ${env.NEW_TAG}" || echo Tag exists
+                        git push origin main --tags
+                    """
                 }
             }
         }
@@ -61,23 +125,11 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline completed successfully ✅"
+            echo "✅ SUCCESS → Umbrella ${env.NEW_TAG}"
+            echo "📦 test:${env.REPO1_VERSION} | test1:${env.REPO2_VERSION}"
         }
         failure {
-            echo "Pipeline failed ❌"
+            echo "❌ Pipeline failed"
         }
     }
-}
-
-
-/*
- * NonCPS function for complex regex
- * NOTE:
- * - No Jenkins steps (echo/sh) allowed here
- * - Only pure Groovy logic
- */
-@NonCPS
-def extractNumber(text) {
-    def m = text =~ /\d+/
-    return m ? m[0] : null
 }
