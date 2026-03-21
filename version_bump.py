@@ -3,8 +3,8 @@ import re
 import subprocess
 import json
 
+
 def get_latest_tag_local():
-    """Get latest vX.Y.Z tag from local repo."""
     try:
         result = subprocess.run(
             ["git", "tag"],
@@ -21,7 +21,6 @@ def get_latest_tag_local():
 
 
 def get_latest_tag_remote(url):
-    """Get latest vX.Y.Z tag from a remote repo."""
     try:
         result = subprocess.run(
             ["git", "ls-remote", "--tags", url],
@@ -43,7 +42,6 @@ def get_latest_tag_remote(url):
 
 
 def bump_version(version):
-    """Bump patch with rollover at 9."""
     major, minor, patch = map(int, version.split('.'))
     if patch < 9:
         patch += 1
@@ -58,12 +56,11 @@ def bump_version(version):
 
 
 def main():
-    repo_name    = sys.argv[1]   # 'test' or 'test1'
-    repo_version = sys.argv[2]   # version that triggered this
-    git_user     = sys.argv[3]   # GIT_USER from credentials
-    git_token    = sys.argv[4]   # GIT_TOKEN from credentials
+    repo_name    = sys.argv[1]
+    repo_version = sys.argv[2]
+    git_user     = sys.argv[3]
+    git_token    = sys.argv[4]
 
-    # Build authenticated URLs
     test_url  = f"https://{git_user}:{git_token}@github.com/Rohitsss-lab/test.git"
     test1_url = f"https://{git_user}:{git_token}@github.com/Rohitsss-lab/test1.git"
 
@@ -79,7 +76,6 @@ def main():
         test_version  = get_latest_tag_remote(test_url)
         test1_version = repo_version
     else:
-        # manual run
         test_version  = get_latest_tag_remote(test_url)
         test1_version = get_latest_tag_remote(test1_url)
 
