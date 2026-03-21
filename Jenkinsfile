@@ -39,7 +39,7 @@ pipeline {
                         def tagList = allTags.readLines()
                                       .findAll { it.trim().startsWith('v') }
                         if (tagList) {
-                            latestTag = tagList[0].trim()
+                            latestTag = tagList.get(0).trim()
                         }
                     }
 
@@ -48,11 +48,11 @@ pipeline {
                     def version = latestTag.replace("v", "")
                     def parts   = version.tokenize('.')
 
-                    def major = (parts.size() > 0 && parts[0]) ? parts[0].toInteger() : 1
-                    def minor = (parts.size() > 1 && parts[1]) ? parts[1].toInteger() : 0
-                    def patch = (parts.size() > 2 && parts[2]) ? parts[2].toInteger() : 0
+                    def major = (parts.size() > 0 && parts.get(0)) ? parts.get(0).toInteger() : 1
+                    def minor = (parts.size() > 1 && parts.get(1)) ? parts.get(1).toInteger() : 0
+                    def patch = (parts.size() > 2 && parts.get(2)) ? parts.get(2).toInteger() : 0
 
-                    // Apply rollover logic matching test/test1 behaviour
+                    // Rollover logic — same as test and test1
                     if (patch < 9) {
                         patch = patch + 1
                     } else if (minor < 9) {
@@ -84,14 +84,12 @@ pipeline {
                 )]) {
                     script {
 
-                        // Helper closure — gets latest vX.Y.Z tag from a repo
                         def getLatestTag = { repoUrl ->
                             def raw = bat(
                                 script: "git ls-remote --tags ${repoUrl}",
                                 returnStdout: true
                             ).trim()
 
-                            // Exclude ^{} peeled refs, extract only clean X.Y.Z versions
                             def versions = raw.readLines()
                                 .findAll { it.contains('refs/tags/v') && !it.contains('^{}') }
                                 .collect { it.replaceAll('.*refs/tags/v', '').trim() }
@@ -99,10 +97,10 @@ pipeline {
                                 .sort     { a, b ->
                                     def ap = a.tokenize('.').collect { it.toInteger() }
                                     def bp = b.tokenize('.').collect { it.toInteger() }
-                                    bp[0] <=> ap[0] ?: bp[1] <=> ap[1] ?: bp[2] <=> ap[2]
+                                    bp.get(0) <=> ap.get(0) ?: bp.get(1) <=> ap.get(1) ?: bp.get(2) <=> ap.get(2)
                                 }
 
-                            return versions ? versions[0] : '1.0.0'
+                            return versions ? versions.get(0) : '1.0.0'
                         }
 
                         def testUrl  = "https://%GIT_USER%:%GIT_TOKEN%@github.com/Rohitsss-lab/test.git"
@@ -114,7 +112,6 @@ pipeline {
                         echo "test  latest tag from GitHub: v${repo1Tag}"
                         echo "test1 latest tag from GitHub: v${repo2Tag}"
 
-                        // Override whichever repo just triggered this run
                         if (params.REPO_NAME == 'test') {
                             env.REPO1_VERSION = params.REPO_VERSION
                             env.REPO2_VERSION = repo2Tag
